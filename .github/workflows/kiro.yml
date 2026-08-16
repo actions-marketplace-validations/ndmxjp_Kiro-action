@@ -1,0 +1,58 @@
+# Tag mode against this repository, using the action from this checkout.
+#
+# This is the full path: tracking comment, branch creation, MCP comment server,
+# and (on a pull request) the CI server. Comment "@kiro ..." on an issue or pull
+# request to trigger it.
+#
+# Requires the KIRO_API_KEY secret.
+name: Kiro
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+  issues:
+    types: [opened, labeled, assigned]
+
+jobs:
+  kiro:
+    # Do not start a runner for every comment in the repository.
+    if: |
+      contains(github.event.comment.body, '@kiro') ||
+      contains(github.event.review.body, '@kiro') ||
+      contains(github.event.issue.body, '@kiro') ||
+      contains(github.event.issue.title, '@kiro') ||
+      github.event.action == 'labeled' ||
+      github.event.action == 'assigned'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      actions: read # lets Kiro read CI results on a pull request
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so diffs against the base branch work.
+          fetch-depth: 0
+
+      - name: Run the action from this checkout
+        id: kiro
+        uses: ./
+        with:
+          kiro_api_key: ${{ secrets.KIRO_API_KEY }}
+          # This repository's own checks, so Kiro can verify its work.
+          allowed_shell_commands: "bun install,bun test *,bun run typecheck,bun run format:check"
+          timeout_minutes: 20
+
+      - name: Upload the CLI output
+        if: always() && steps.kiro.outputs.execution_file != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: kiro-output
+          path: ${{ steps.kiro.outputs.execution_file }}
+          if-no-files-found: warn

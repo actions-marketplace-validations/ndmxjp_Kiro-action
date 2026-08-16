@@ -1,0 +1,84 @@
+# End-to-end smoke test for this action, run by hand.
+#
+# It exercises the parts that unit tests cannot: installing the Kiro CLI,
+# whether the CLI accepts the agent config this action generates, and whether
+# the run reaches a clean exit. Agent mode is used deliberately — it starts no
+# MCP servers, so a failure here is the CLI or the agent config, not MCP.
+#
+# Requires the KIRO_API_KEY secret. Run it from the Actions tab.
+name: Kiro smoke test
+
+on:
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: "Prompt to send. The default only reads the repository."
+        required: false
+        default: |
+          Report what you can see, in three short lines:
+          1. The name of this repository's package, from package.json.
+          2. How many files are in src/kiro/.
+          3. Which tools you were granted for this run.
+          Do not modify any file.
+      effort:
+        description: "Reasoning effort"
+        required: false
+        default: "low"
+        type: choice
+        options: [low, medium, high]
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run the action from this checkout
+        id: kiro
+        uses: ./
+        with:
+          kiro_api_key: ${{ secrets.KIRO_API_KEY }}
+          prompt: ${{ inputs.prompt }}
+          effort: ${{ inputs.effort }}
+          timeout_minutes: 10
+
+      - name: Report the outcome
+        if: always()
+        env:
+          CONCLUSION: ${{ steps.kiro.outputs.conclusion }}
+          EXECUTION_FILE: ${{ steps.kiro.outputs.execution_file }}
+        run: |
+          echo "conclusion: $CONCLUSION"
+          echo "execution_file: $EXECUTION_FILE"
+
+      # Keep the CLI output even when the run failed: that file is where the
+      # agent-config and MCP startup errors show up.
+      - name: Upload the CLI output
+        if: always() && steps.kiro.outputs.execution_file != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: kiro-output
+          path: ${{ steps.kiro.outputs.execution_file }}
+          if-no-files-found: warn
+
+      # The agent config is generated at run time under $HOME and is not in the
+      # repository, so capture it too — it is the thing most likely to need
+      # adjusting. Copied first because upload-artifact does not expand "~".
+      - name: Collect the generated agent config
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/agent-config"
+          cp "$HOME/.kiro/agents/kiro-action.json" "$RUNNER_TEMP/agent-config/" \
+            || echo "No agent config was generated (the run failed before that point)."
+
+      - name: Upload the generated agent config
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kiro-agent-config
+          path: ${{ runner.temp }}/agent-config
+          if-no-files-found: warn
