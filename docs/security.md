@@ -123,13 +123,14 @@ Two v3 quirks are worth knowing, both measured:
 - It ignores `mcpServers` declared inside an agent profile. The same server in
   `~/.kiro/settings/mcp.json` with `includeMcpJson: true` works, so that is where
   this action writes them on v3 — which also merges the checkout's copy, hence the
-  config restore above. The nearest upstream reports are kirodotdev/Kiro#7349
-  (inline servers ignored over ACP, closed) and #7425 (not loaded in 2.0.0's
-  default mode, open); the v3 case does not appear to be reported.
+  config restore above. Reported upstream as
+  [kirodotdev/Kiro#10876](https://github.com/kirodotdev/Kiro/issues/10876).
 - The CLI exits after answering but the KAS server it starts as a grandchild keeps
   running and holds the output pipes, which would keep this action's own process
-  from exiting. The CLI is therefore started in its own process group, and the
-  group is signalled and the pipes released once the run is over.
+  from exiting — one leaked server per run, measured at eleven in a single job. The
+  CLI is therefore started in its own process group, and the group is signalled and
+  the pipes released once the run is over. Reported upstream as
+  [kirodotdev/Kiro#10877](https://github.com/kirodotdev/Kiro/issues/10877).
 
 v3 is not the default because 3.0 is documented as early access, `includeMcpJson`
 widens what gets loaded, and its registry is fragile in ways others have hit —

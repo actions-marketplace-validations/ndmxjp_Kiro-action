@@ -10,9 +10,8 @@ import type { McpServers } from "../mcp/prepare-mcp-config";
  * an agent profile. Measured on `kiro-cli 2.18.1 --v3`: with the server inline
  * in the profile the model could not see the tool at all, and with the identical
  * server in `~/.kiro/settings/mcp.json` plus `includeMcpJson: true` it saw
- * `mcp_probe_echo_probe` and called it successfully. The closest upstream
- * reports are kirodotdev/Kiro#7349 (inline servers ignored over ACP, closed) and
- * #7425 (servers not loaded in 2.0.0's default mode).
+ * `mcp_probe_echo_probe` and called it successfully. Reported upstream as
+ * kirodotdev/Kiro#10876.
  *
  * The user scope is used rather than the workspace one on purpose: `.kiro/` in
  * the checkout is attacker-controlled on a pull request.

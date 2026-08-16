@@ -63,6 +63,14 @@ There is no `--output-format json` on `kiro-cli chat`
 why there is no structured output and no per-turn report: the execution file is
 the raw CLI output with secrets redacted.
 
+Bugs found while building this action and reported upstream:
+[#10876](https://github.com/kirodotdev/Kiro/issues/10876) (v3 ignores MCP servers
+declared in an agent profile) and
+[#10877](https://github.com/kirodotdev/Kiro/issues/10877) (v3 leaks a KAS server
+per run, which holds the caller's stdout). ANSI escapes in piped
+`--no-interactive` output was already reported as
+[#8352](https://github.com/kirodotdev/Kiro/issues/8352); this action strips them.
+
 AWS SigV4 / Bedrock-style authentication is not supported.
 
 ## Can it read CI failures?
