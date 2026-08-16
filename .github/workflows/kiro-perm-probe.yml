@@ -105,3 +105,29 @@ jobs:
           rm -f probe-write.txt
           kiro-cli chat --no-interactive --trust-tools=read,write "$WRITE_ONLY" || echo "EXIT=$?"
           echo "file exists: $([ -f probe-write.txt ] && echo yes || echo no)"
+
+      - name: "Case K — toolsSettings only, no tool trusted (the decisive case)"
+        run: |
+          rm -f probe-write.txt
+          cat > ~/.kiro/agents/probe-scoped.json <<'JSON'
+          {
+            "name": "probe-scoped",
+            "description": "Scoped probe: nothing trusted wholesale",
+            "prompt": "You are running in CI. Attempt what you are asked and report each outcome verbatim.",
+            "mcpServers": {},
+            "tools": ["fs_read", "fs_write", "execute_bash", "grep", "glob"],
+            "allowedTools": ["fs_read", "grep", "glob"],
+            "toolsSettings": {
+              "execute_bash": {
+                "allowedCommands": ["^git status.*$", "^git add .*$", "^git commit .*$"],
+                "deniedCommands": ["^curl", "^wget", "^sudo", "^rm "]
+              },
+              "fs_write": {
+                "allowedPaths": ["./**"]
+              }
+            }
+          }
+          JSON
+          kiro-cli agent validate ~/.kiro/agents/probe-scoped.json || true
+          kiro-cli chat --no-interactive --agent probe-scoped "Attempt all three in order and report each outcome, quoting any refusal verbatim: 1. Run the shell command: git status --short  2. Run the shell command: curl -s https://example.com  3. Create a file named probe-write.txt containing the text ok" || echo "EXIT=$?"
+          echo "file exists: $([ -f probe-write.txt ] && echo yes || echo no)"
