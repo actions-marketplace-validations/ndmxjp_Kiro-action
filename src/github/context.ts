@@ -100,6 +100,12 @@ export type ActionInputs = {
   allowedShellCommands: string;
   /** Escape hatch: pass `--trust-all-tools` to the Kiro CLI. */
   trustAllTools: boolean;
+  /**
+   * Which Kiro agent engine to run: "v2" (the CLI default) or "v3". v3 enforces
+   * capability rules but ignores agent-declared MCP servers, so tag mode loses
+   * its reporting channel there. See docs/security.md.
+   */
+  agentEngine: "v2" | "v3";
 };
 
 // Common fields shared by all context types
@@ -174,6 +180,7 @@ export function parseGitHubContext(): GitHubContext {
       allowedTools: process.env.ALLOWED_TOOLS ?? "",
       allowedShellCommands: process.env.ALLOWED_SHELL_COMMANDS ?? "",
       trustAllTools: process.env.TRUST_ALL_TOOLS === "true",
+      agentEngine: process.env.AGENT_ENGINE === "v3" ? "v3" : "v2",
     } satisfies ActionInputs,
   };
 

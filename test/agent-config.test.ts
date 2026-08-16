@@ -1,90 +1,159 @@
 import { describe, expect, test } from "bun:test";
-import { buildAgentConfig, GIT_PUSH_WRAPPER } from "../src/kiro/agent-config";
+import {
+  buildAgentConfig,
+  hasShellAccess,
+  willGrantShell,
+  type BuildAgentConfigParams,
+} from "../src/kiro/agent-config";
 import { parseAdditionalPermissions } from "../src/github/token";
 
 const mcpServers = {
   github_comment: { command: "bun", args: ["run", "server.ts"] },
 };
 
-describe("buildAgentConfig", () => {
+function config(overrides: Partial<BuildAgentConfigParams> = {}) {
+  return buildAgentConfig({
+    mode: "tag",
+    engine: "v2",
+    mcpServers,
+    extraTools: "",
+    extraShellCommands: "",
+    model: "",
+    systemPrompt: "be helpful",
+    ...overrides,
+  });
+}
+
+describe("buildAgentConfig on the v2 engine", () => {
   test("grants the MCP servers it was given, and never merges repo MCP config", () => {
-    const config = buildAgentConfig({
-      mode: "tag",
-      mcpServers,
-      extraTools: "",
-      extraShellCommands: "",
-      model: "",
-      systemPrompt: "be helpful",
-    });
+    const built = config();
 
-    expect(config.tools).toContain("@github_comment");
-    expect(config.allowedTools).toContain("@github_comment");
-    expect(config.includeMcpJson).toBe(false);
-    expect(config.mcpServers).toBe(mcpServers);
+    expect(built.tools).toContain("@github_comment");
+    expect(built.allowedTools).toContain("@github_comment");
+    expect(built.includeMcpJson).toBe(false);
+    expect(built.mcpServers).toBe(mcpServers);
   });
 
-  test("does not blanket-allow the shell capability", () => {
-    const config = buildAgentConfig({
-      mode: "tag",
-      mcpServers,
-      extraTools: "",
-      extraShellCommands: "",
-      model: "",
-      systemPrompt: "",
-    });
+  test("grants read and write tools but no shell", () => {
+    const built = config();
 
-    expect(config.tools).toContain("shell");
-    expect(config.allowedTools).not.toContain("shell");
+    expect(built.allowedTools).toContain("fs_read");
+    expect(built.allowedTools).toContain("fs_write");
+    expect(built.allowedTools).not.toContain("execute_bash");
+    expect(hasShellAccess(built)).toBe(false);
   });
 
-  test("allows the push wrapper but not a bare git push", () => {
-    const config = buildAgentConfig({
-      mode: "tag",
-      mcpServers,
-      extraTools: "",
-      extraShellCommands: "",
-      model: "",
-      systemPrompt: "",
-    });
+  test("emits no capability rules, which v2 would ignore anyway", () => {
+    expect(config().permissions).toBeUndefined();
+  });
 
-    const shellRule = config.permissions.rules.find(
-      (rule) => rule.capability === "shell",
+  test("ignores allowed_shell_commands, because v2 cannot scope shell", () => {
+    const built = config({ extraShellCommands: "bun test *" });
+
+    expect(hasShellAccess(built)).toBe(false);
+    expect(built.permissions).toBeUndefined();
+  });
+
+  test("still grants shell when a workflow names it in allowed_tools", () => {
+    const built = config({ extraTools: "execute_bash" });
+
+    expect(hasShellAccess(built)).toBe(true);
+  });
+
+  test("grants every tool it lists, since an ungranted tool cannot run headlessly", () => {
+    const built = config({ extraTools: "web_search" });
+
+    expect(built.tools).toEqual(built.allowedTools);
+    expect(built.allowedTools).toContain("web_search");
+  });
+});
+
+describe("buildAgentConfig on the v3 engine", () => {
+  test("confines writes to the checkout", () => {
+    const rules = config({ engine: "v3" }).permissions?.rules ?? [];
+    const write = rules.find((rule) => rule.capability === "fs_write");
+
+    expect(write).toEqual({
+      capability: "fs_write",
+      match: ["./**"],
+      effect: "allow",
+    });
+  });
+
+  test("honours allowed_shell_commands and grants the shell tool", () => {
+    const built = config({
+      engine: "v3",
+      extraShellCommands: "bun test *, git add *",
+    });
+    const rules = built.permissions?.rules ?? [];
+    const allow = rules.find(
+      (rule) => rule.capability === "shell" && rule.effect === "allow",
     );
-    expect(shellRule?.effect).toBe("allow");
-    expect(shellRule?.match).toContain(`${GIT_PUSH_WRAPPER} *`);
-    expect(shellRule?.match).not.toContain("git push *");
+
+    expect(allow?.match).toEqual(["bun test *", "git add *"]);
+    expect(hasShellAccess(built)).toBe(true);
   });
 
-  test("appends extra tools and shell patterns from inputs", () => {
-    const config = buildAgentConfig({
-      mode: "agent",
-      mcpServers: {},
-      extraTools: "web_search, @other",
-      extraShellCommands: "bun test *, bun run build",
-      model: "some-model",
-      systemPrompt: "",
-    });
+  test("does not grant shell when no commands were allowed", () => {
+    const built = config({ engine: "v3" });
+    const rules = built.permissions?.rules ?? [];
 
-    expect(config.tools).toContain("web_search");
-    expect(config.allowedTools).toContain("@other");
-    expect(config.model).toBe("some-model");
-
-    const shellRule = config.permissions.rules[0];
-    expect(shellRule?.match).toContain("bun test *");
-    expect(shellRule?.match).toContain("bun run build");
+    expect(hasShellAccess(built)).toBe(false);
+    expect(
+      rules.some(
+        (rule) => rule.capability === "shell" && rule.effect === "allow",
+      ),
+    ).toBe(false);
   });
 
-  test("omits the model key when no model is configured", () => {
-    const config = buildAgentConfig({
-      mode: "agent",
-      mcpServers: {},
-      extraTools: "",
-      extraShellCommands: "",
-      model: "",
-      systemPrompt: "",
-    });
+  test("always denies the dangerous commands, since deny outranks allow", () => {
+    const rules =
+      config({ engine: "v3", extraShellCommands: "bash *" }).permissions
+        ?.rules ?? [];
+    const deny = rules.find(
+      (rule) => rule.capability === "shell" && rule.effect === "deny",
+    );
 
-    expect("model" in config).toBe(false);
+    expect(deny?.match).toContain("curl *");
+    expect(deny?.match).toContain("sudo *");
+    expect(deny?.match).toContain("rm -rf *");
+  });
+});
+
+describe("willGrantShell", () => {
+  test("is false by default", () => {
+    expect(
+      willGrantShell({ engine: "v2", extraTools: "", extraShellCommands: "" }),
+    ).toBe(false);
+  });
+
+  test("is true when shell is named in allowed_tools, on either engine", () => {
+    for (const engine of ["v2", "v3"] as const) {
+      expect(
+        willGrantShell({
+          engine,
+          extraTools: "shell",
+          extraShellCommands: "",
+        }),
+      ).toBe(true);
+    }
+  });
+
+  test("is true on v3 with allowed shell commands, false on v2", () => {
+    expect(
+      willGrantShell({
+        engine: "v3",
+        extraTools: "",
+        extraShellCommands: "bun test *",
+      }),
+    ).toBe(true);
+    expect(
+      willGrantShell({
+        engine: "v2",
+        extraTools: "",
+        extraShellCommands: "bun test *",
+      }),
+    ).toBe(false);
   });
 });
 

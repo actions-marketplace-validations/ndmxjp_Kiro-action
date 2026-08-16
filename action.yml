@@ -80,11 +80,15 @@ inputs:
     required: false
     default: ""
   allowed_shell_commands:
-    description: "Comma-separated extra shell command patterns to allow, e.g. 'bun test *,bun run build'. Commands that are not allowed are denied, because headless mode cannot prompt."
+    description: "Comma-separated shell command patterns to allow, e.g. 'bun test *,bun run build'. Only honoured with agent_engine: v3 — the v2 engine cannot scope shell access, so the input is ignored there. See docs/security.md."
     required: false
     default: ""
+  agent_engine:
+    description: "Kiro agent engine: 'v2' (default) or 'v3'. v3 enforces per-command shell rules and confines writes to the checkout, but ignores this action's MCP servers, so tag mode cannot report progress on it. Use v3 for agent-mode automation that needs a scoped shell."
+    required: false
+    default: "v2"
   trust_all_tools:
-    description: "Pass --trust-all-tools to the CLI. This removes tool gating entirely; only use it on trusted input."
+    description: "Pass --trust-all-tools to the CLI. This removes tool gating entirely — the agent can run any command, including curl. Only use it on trusted input."
     required: false
     default: "false"
   kiro_args:
@@ -216,6 +220,7 @@ runs:
         ALLOWED_TOOLS: ${{ inputs.allowed_tools }}
         ALLOWED_SHELL_COMMANDS: ${{ inputs.allowed_shell_commands }}
         TRUST_ALL_TOOLS: ${{ inputs.trust_all_tools }}
+        AGENT_ENGINE: ${{ inputs.agent_engine }}
         KIRO_ARGS: ${{ inputs.kiro_args }}
         TIMEOUT_MINUTES: ${{ inputs.timeout_minutes }}
         # Filtering and identity

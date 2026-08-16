@@ -1,3 +1,4 @@
+import * as core from "@actions/core";
 import { checkHumanActor } from "../../github/validation/actor";
 import { createInitialComment } from "../../github/operations/comments/create-initial";
 import { updateTrackingComment } from "../../github/operations/comments/update-with-branch";
@@ -13,7 +14,11 @@ import {
 import { buildSystemPrompt, createTagPrompt } from "../../create-prompt";
 import { isEntityContext, type GitHubContext } from "../../github/context";
 import type { Octokits } from "../../github/api/client";
-import { buildAgentConfig, writeAgentConfig } from "../../kiro/agent-config";
+import {
+  buildAgentConfig,
+  willGrantShell,
+  writeAgentConfig,
+} from "../../kiro/agent-config";
 
 export type PreparedRun = {
   commentId?: number;
@@ -21,6 +26,8 @@ export type PreparedRun = {
   prompt: string;
   agentPath: string;
   hasMcpServers: boolean;
+  /** `Co-authored-by:` trailer for the commit this action makes. */
+  coAuthorLine?: string;
 };
 
 /**
@@ -32,10 +39,13 @@ export async function prepareTagMode({
   context,
   octokit,
   githubToken,
+  commitMessageFile,
 }: {
   context: GitHubContext;
   octokit: Octokits;
   githubToken: string;
+  /** Where the agent is asked to leave its commit message. */
+  commitMessageFile: string;
 }): Promise<PreparedRun> {
   if (!isEntityContext(context)) {
     throw new Error("Tag mode requires an issue or pull request context");
@@ -72,7 +82,7 @@ export async function prepareTagMode({
 
   if (branchInfo.kiroBranch) {
     // Show the branch in the tracking comment right away, so a reader can
-    // follow along before Kiro pushes anything.
+    // follow along before anything is pushed.
     try {
       await updateTrackingComment(
         octokit,
@@ -94,23 +104,41 @@ export async function prepareTagMode({
     context,
   });
 
+  // The v3 engine ignores agent-declared MCP servers (measured), which in tag
+  // mode means the tracking comment would never be updated: the run would look
+  // silent to whoever asked for it.
+  if (context.inputs.agentEngine === "v3") {
+    core.warning(
+      "agent_engine: v3 does not load this action's MCP servers, so Kiro cannot " +
+        "update the tracking comment. Tag mode is only fully supported on v2.",
+    );
+  }
+
+  const hasShell = willGrantShell({
+    engine: context.inputs.agentEngine,
+    extraTools: context.inputs.allowedTools,
+    extraShellCommands: context.inputs.allowedShellCommands,
+  });
+
   const agentConfig = buildAgentConfig({
     mode: "tag",
+    engine: context.inputs.agentEngine,
     mcpServers,
     extraTools: context.inputs.allowedTools,
     extraShellCommands: context.inputs.allowedShellCommands,
     model: context.inputs.model,
-    systemPrompt: buildSystemPrompt("tag"),
+    systemPrompt: buildSystemPrompt("tag", hasShell),
   });
   const agentPath = await writeAgentConfig(agentConfig);
 
-  const prompt = createTagPrompt(
+  const { prompt, coAuthorLine } = createTagPrompt(
     commentId,
     branchInfo.baseBranch,
     branchInfo.kiroBranch,
     githubData,
     context,
     Boolean(mcpServers.github_ci),
+    commitMessageFile,
   );
 
   return {
@@ -119,5 +147,6 @@ export async function prepareTagMode({
     prompt,
     agentPath,
     hasMcpServers: Object.keys(mcpServers).length > 0,
+    coAuthorLine,
   };
 }

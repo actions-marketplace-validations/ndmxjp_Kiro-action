@@ -4,7 +4,11 @@ import { prepareMcpServers } from "../../mcp/prepare-mcp-config";
 import { buildSystemPrompt } from "../../create-prompt";
 import type { GitHubContext } from "../../github/context";
 import type { Octokits } from "../../github/api/client";
-import { buildAgentConfig, writeAgentConfig } from "../../kiro/agent-config";
+import {
+  buildAgentConfig,
+  willGrantShell,
+  writeAgentConfig,
+} from "../../kiro/agent-config";
 import type { PreparedRun } from "../tag";
 
 /**
@@ -49,13 +53,20 @@ export async function prepareAgentMode({
     context,
   });
 
+  const hasShell = willGrantShell({
+    engine: context.inputs.agentEngine,
+    extraTools: context.inputs.allowedTools,
+    extraShellCommands: context.inputs.allowedShellCommands,
+  });
+
   const agentConfig = buildAgentConfig({
     mode: "agent",
+    engine: context.inputs.agentEngine,
     mcpServers,
     extraTools: context.inputs.allowedTools,
     extraShellCommands: context.inputs.allowedShellCommands,
     model: context.inputs.model,
-    systemPrompt: buildSystemPrompt("agent"),
+    systemPrompt: buildSystemPrompt("agent", hasShell),
   });
   const agentPath = await writeAgentConfig(agentConfig);
 

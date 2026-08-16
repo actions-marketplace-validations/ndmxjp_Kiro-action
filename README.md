@@ -86,30 +86,32 @@ Set `track_progress: true` to get the tracking comment _and_ a fixed prompt.
 
 ## What it can and cannot do
 
-Can: answer questions, review code, edit files, commit, push to a branch it
-created or to the PR branch, read CI results for the PR, and hand you a
-pre-filled "Create a PR" link.
+Can: answer questions, review code, edit files, read CI results for the PR, and
+hand you a pre-filled "Create a PR" link. The action commits and pushes whatever
+it edited, to a branch it created or to the PR branch.
 
-Cannot: open, approve, or merge a pull request; submit a formal PR review; post
-more than one comment; or touch `.github/workflows`. Only users with write access
-to the repository can trigger a run.
+Cannot: run any command — no tests, no linters, no git (see
+[docs/security.md](docs/security.md)); open, approve, or merge a pull request;
+submit a formal PR review; post more than one comment; or touch
+`.github/workflows`. Only users with write access to the repository can trigger a
+run.
 
 ## Inputs
 
 `kiro_api_key` is the only required input. The rest are documented in
 [docs/configuration.md](docs/configuration.md); the most commonly used are:
 
-| Input                    | Default        | Purpose                                             |
-| ------------------------ | -------------- | --------------------------------------------------- |
-| `kiro_api_key`           | —              | Kiro API key. Required.                             |
-| `prompt`                 | `""`           | Instructions; selects agent mode.                   |
-| `trigger_phrase`         | `@kiro`        | Phrase that starts a tag-mode run.                  |
-| `label_trigger`          | `kiro`         | Label that starts a tag-mode run.                   |
-| `branch_prefix`          | `kiro/`        | Prefix for created branches.                        |
-| `allowed_shell_commands` | `""`           | Extra shell commands to permit (e.g. `bun test *`). |
-| `effort`                 | `""`           | CLI reasoning effort: `low`…`max`.                  |
-| `timeout_minutes`        | `""`           | Hard limit on the CLI run.                          |
-| `github_token`           | `github.token` | Identity to act as.                                 |
+| Input             | Default        | Purpose                                                                |
+| ----------------- | -------------- | ---------------------------------------------------------------------- |
+| `kiro_api_key`    | —              | Kiro API key. Required.                                                |
+| `prompt`          | `""`           | Instructions; selects agent mode.                                      |
+| `trigger_phrase`  | `@kiro`        | Phrase that starts a tag-mode run.                                     |
+| `label_trigger`   | `kiro`         | Label that starts a tag-mode run.                                      |
+| `branch_prefix`   | `kiro/`        | Prefix for created branches.                                           |
+| `agent_engine`    | `v2`           | `v3` enforces scoped shell and writes, but loses the tracking comment. |
+| `effort`          | `""`           | CLI reasoning effort: `low`…`max`.                                     |
+| `timeout_minutes` | `""`           | Hard limit on the CLI run.                                             |
+| `github_token`    | `github.token` | Identity to act as.                                                    |
 
 Outputs: `conclusion`, `contains_trigger`, `execution_file`, `branch_name`,
 `comment_id`, `github_token`.
@@ -126,8 +128,9 @@ In short:
 - On a pull request, config that the CLI executes (`.kiro/`, `.mcp.json`,
   `AGENTS.md`, `.gitmodules`, `.husky/`, …) is restored from the base branch, so a
   PR cannot introduce hooks or MCP servers that run in this job.
-- Only a fixed list of git commands is permitted; `git push` is reachable only
-  through a wrapper that rejects options entirely.
+- The agent gets no shell at all: in headless mode the CLI cannot scope shell
+  access, so allowing `git add` would also allow `curl`. This action commits and
+  pushes on its behalf instead.
 - Do not use `pull_request_target`, and do not set `trust_all_tools: true`, on a
   repository that accepts pull requests from strangers.
 

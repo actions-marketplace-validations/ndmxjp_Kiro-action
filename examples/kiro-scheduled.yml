@@ -24,6 +24,10 @@ jobs:
         with:
           kiro_api_key: ${{ secrets.KIRO_API_KEY }}
           effort: high
+          # allowed_shell_commands only takes effect on the v3 engine, which
+          # enforces per-command rules. Agent mode does not need the MCP
+          # tracking comment that v3 gives up.
+          agent_engine: v3
           allowed_shell_commands: "bun outdated,bun pm ls"
           prompt: |
             Summarise this repository's dependency health.

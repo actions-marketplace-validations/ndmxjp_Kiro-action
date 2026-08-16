@@ -6,47 +6,51 @@ import type { McpServers } from "../mcp/prepare-mcp-config";
 import type { AutoDetectedMode } from "../modes/detector";
 
 /**
- * The hardened push wrapper the agent is allowed to run instead of `git push`.
- * See scripts/git-push.sh for why a bare `git push` allowance is unsafe.
+ * Hardened push wrapper. The agent has no shell by default (see below), so this
+ * is only reachable by a workflow that opts into `shell` via `allowed_tools`;
+ * it is kept because `git push` with arbitrary arguments is remote code
+ * execution (`git push --receive-pack='sh -c ...' ext::sh origin`).
  *
- * Normalized, because this exact string goes into a permission `match` pattern
- * and also into the prompt: the agent's command has to match it literally.
- * `GITHUB_ACTION_PATH` ends in `/.` when the action is used as `uses: ./`, which
- * would otherwise produce `<workspace>/.//scripts/git-push.sh` — a path the
- * shell resolves fine but which no longer matches what the model is likely to
- * type.
+ * Normalized with resolve(): `GITHUB_ACTION_PATH` ends in `/.` when the action
+ * is used as `uses: ./`, which would otherwise yield a doubled slash.
  */
 export const GIT_PUSH_WRAPPER = resolve(
   process.env.GITHUB_ACTION_PATH || ".",
   "scripts/git-push.sh",
 );
 
-/** Read-only built-ins, safe to grant in every mode. */
-const READ_TOOLS = ["read", "glob", "grep", "todo", "thinking", "report"];
+/**
+ * Read-only built-ins. `fs_read` is the canonical CLI 2.x name; the CLI accepts
+ * the `read` alias too, but the canonical names are what its own docs use.
+ */
+const READ_TOOLS = ["fs_read", "grep", "glob"];
 
 /** File-editing built-ins. */
-const WRITE_TOOLS = ["write", "code"];
+const WRITE_TOOLS = ["fs_write", "code"];
 
 /**
- * Shell commands the agent may run without approval. Everything else falls
- * through to a prompt, and a prompt in `--no-interactive` mode is a denial, so
- * this list is the effective shell allowlist.
+ * The shell tool, deliberately not granted by default.
+ *
+ * Measured on kiro-cli 2.18.1 in `--no-interactive` mode (see
+ * .github/workflows/kiro-perm-probe.yml):
+ *
+ *   - Only tools trusted wholesale run at all. Anything else is refused with
+ *     "non-interactive mode (no user to approve)", because there is no one to
+ *     prompt — this includes commands the interactive default policy allows,
+ *     such as `git status`.
+ *   - Trusting a tool *overrides* its `toolsSettings`. Trusting `execute_bash`
+ *     with `allowedCommands: ["^git .*$"]` still ran `curl`, and the CLI says so:
+ *     "You have trusted execute_bash tool, which overrides the toolsSettings".
+ *
+ * So headless shell access is all-or-nothing: there is no way to allow `git add`
+ * without also allowing `curl`. Rather than hand the model an unrestricted
+ * shell, this action gives it no shell and performs the commit and push itself
+ * (src/git/commit.ts). A workflow can opt in with `allowed_tools: execute_bash`,
+ * which is documented as unrestricted.
  */
-const DEFAULT_SHELL_ALLOW = [
-  "git status",
-  "git status *",
-  "git diff",
-  "git diff *",
-  "git log",
-  "git log *",
-  "git show *",
-  "git rev-parse *",
-  "git ls-files",
-  "git ls-files *",
-  "git add *",
-  "git commit *",
-  "git rm *",
-];
+const SHELL_TOOL = "execute_bash";
+
+export type AgentEngine = "v2" | "v3";
 
 export type PermissionRule = {
   capability: string;
@@ -60,14 +64,22 @@ export type KiroAgentConfig = {
   prompt?: string;
   mcpServers: McpServers;
   tools: string[];
+  /**
+   * Tools usable without approval. In headless mode this is the effective
+   * capability list: a tool absent from here cannot run at all.
+   */
   allowedTools: string[];
-  permissions: { rules: PermissionRule[] };
   /**
    * Never merge `.kiro/settings/mcp.json` from the checkout: on a pull request
    * that file is attacker-controlled and would let a PR add MCP servers, i.e.
    * arbitrary commands.
    */
   includeMcpJson: false;
+  /**
+   * Capability rules, honoured only by the v3 agent engine. On v2 they are
+   * ignored, which is why `allowedTools` above carries the real policy there.
+   */
+  permissions?: { rules: PermissionRule[] };
   model?: string;
 };
 
@@ -80,10 +92,11 @@ function parseList(value: string): string[] {
 
 export type BuildAgentConfigParams = {
   mode: AutoDetectedMode;
+  engine: AgentEngine;
   mcpServers: McpServers;
   /** Comma-separated extra tool names from the `allowed_tools` input. */
   extraTools: string;
-  /** Comma-separated extra shell patterns from the `allowed_shell_commands` input. */
+  /** Comma-separated shell patterns from `allowed_shell_commands` (v3 only). */
   extraShellCommands: string;
   model: string;
   systemPrompt: string;
@@ -91,41 +104,31 @@ export type BuildAgentConfigParams = {
 
 export function buildAgentConfig({
   mode,
+  engine,
   mcpServers,
   extraTools,
   extraShellCommands,
   model,
   systemPrompt,
 }: BuildAgentConfigParams): KiroAgentConfig {
-  // `@server` grants every tool exposed by that MCP server.
+  // `@server` grants every tool exposed by that MCP server. Verified on v2:
+  // with `allowedTools: ["@probe"]` the server's tool was callable headlessly.
   const mcpToolNames = Object.keys(mcpServers).map((name) => `@${name}`);
+  const extra = parseList(extraTools);
+  const shellPatterns = parseList(extraShellCommands);
 
-  const tools = [
-    ...READ_TOOLS,
-    ...WRITE_TOOLS,
-    "shell",
-    ...mcpToolNames,
-    ...parseList(extraTools),
-  ];
+  // On v3, scoped shell is possible, so allowed_shell_commands can be honoured
+  // and the shell tool is granted when the workflow asked for commands. On v2
+  // there is no scoping, so the input cannot be honoured and shell is only
+  // granted when explicitly named in allowed_tools.
+  const grantShell = engine === "v3" && shellPatterns.length > 0;
 
-  // `shell` is deliberately absent from allowedTools: individual commands are
-  // granted through the permission rules below instead of trusting the whole
-  // capability.
-  const allowedTools = [
+  const granted = [
     ...READ_TOOLS,
     ...WRITE_TOOLS,
     ...mcpToolNames,
-    ...parseList(extraTools),
-  ];
-
-  const shellAllow = [
-    ...DEFAULT_SHELL_ALLOW,
-    `${GIT_PUSH_WRAPPER} *`,
-    ...parseList(extraShellCommands),
-  ];
-
-  const rules: PermissionRule[] = [
-    { capability: "shell", match: shellAllow, effect: "allow" },
+    ...(grantShell ? [SHELL_TOOL] : []),
+    ...extra,
   ];
 
   return {
@@ -133,12 +136,75 @@ export function buildAgentConfig({
     description: `GitHub Actions agent (${mode} mode) created by kiro-action`,
     prompt: systemPrompt,
     mcpServers,
-    tools: dedupe(tools),
-    allowedTools: dedupe(allowedTools),
-    permissions: { rules },
+    // `tools` and `allowedTools` are the same list on purpose: on v2 a tool that
+    // is available but not granted cannot run at all, so listing it separately
+    // would only mislead the model into trying it.
+    tools: dedupe(granted),
+    allowedTools: dedupe(granted),
     includeMcpJson: false,
+    ...(engine === "v3"
+      ? { permissions: { rules: buildV3Rules(shellPatterns) } }
+      : {}),
     ...(model ? { model } : {}),
   };
+}
+
+/**
+ * Capability rules for the v3 engine, which — unlike v2 — enforces them.
+ *
+ * Measured on the v3 engine: `fs_write` scoped to `./**` blocked a write to
+ * /tmp, a `shell` allow rule covered `git add`/`git commit` (neither is a v3
+ * default), and a `shell` deny rule blocked `curl`, naming the agent profile as
+ * its source.
+ */
+function buildV3Rules(shellPatterns: string[]): PermissionRule[] {
+  const rules: PermissionRule[] = [
+    { capability: "fs_read", effect: "allow" },
+    // Confine writes to the checkout. Without this the agent could write to
+    // $HOME, which is how it would reach its own permission files.
+    { capability: "fs_write", match: ["./**"], effect: "allow" },
+  ];
+
+  if (shellPatterns.length > 0) {
+    rules.push({ capability: "shell", match: shellPatterns, effect: "allow" });
+  }
+
+  // Deny wins over allow in every scope, so these hold even if a workflow
+  // allows a broad pattern such as "bash *".
+  rules.push({
+    capability: "shell",
+    match: ["curl *", "wget *", "sudo *", "rm -rf *", "nc *", "ssh *"],
+    effect: "deny",
+  });
+
+  return rules;
+}
+
+/** Whether the agent will end up with shell access, before the config is built. */
+export function willGrantShell({
+  engine,
+  extraTools,
+  extraShellCommands,
+}: {
+  engine: AgentEngine;
+  extraTools: string;
+  extraShellCommands: string;
+}): boolean {
+  if (
+    parseList(extraTools).some(
+      (tool) => tool === SHELL_TOOL || tool === "shell",
+    )
+  ) {
+    return true;
+  }
+  return engine === "v3" && parseList(extraShellCommands).length > 0;
+}
+
+/** Whether a built config grants shell access. */
+export function hasShellAccess(config: KiroAgentConfig): boolean {
+  return config.allowedTools.some(
+    (tool) => tool === SHELL_TOOL || tool === "shell",
+  );
 }
 
 function dedupe(values: string[]): string[] {
@@ -150,7 +216,7 @@ function dedupe(values: string[]): string[] {
  *
  * Deliberately *not* written into the repository's `.kiro/agents/`: that
  * directory lives inside the checked-out (untrusted) working tree, and a file
- * there would also be picked up by a `git add -A` that Kiro makes later.
+ * there would also be swept up by the `git add -A` this action makes later.
  */
 export async function writeAgentConfig(
   config: KiroAgentConfig,

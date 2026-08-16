@@ -20,6 +20,7 @@ const inputs: ActionInputs = {
   allowedTools: "",
   allowedShellCommands: "",
   trustAllTools: false,
+  agentEngine: "v2",
 };
 
 function issueCommentContext(body: string): ParsedGitHubContext {

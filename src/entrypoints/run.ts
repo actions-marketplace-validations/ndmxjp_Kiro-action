@@ -22,6 +22,7 @@ import { prepareAgentMode } from "../modes/agent";
 import { installKiroCli } from "../kiro/install";
 import { prepareKiroEnvironment } from "../kiro/env";
 import { runKiro, type KiroRunResult } from "../kiro/run";
+import { commitAndPush, type CommitAndPushResult } from "../git/commit";
 import { KIRO_AGENT_NAME } from "../github/constants";
 import { updateCommentLink } from "./update-comment-link";
 
@@ -32,6 +33,9 @@ export async function run() {
   const runnerTemp = process.env.RUNNER_TEMP || "/tmp";
   const promptFile = `${runnerTemp}/kiro-prompts/kiro-prompt.txt`;
   const outputFile = `${runnerTemp}/kiro-output/kiro-output.txt`;
+  // Outside the workspace on purpose: the agent writes its commit message here,
+  // and a path inside the checkout would end up in the commit itself.
+  const commitMessageFile = `${runnerTemp}/kiro-commit-message.txt`;
 
   let context: GitHubContext | undefined;
   let octokit: Octokits | undefined;
@@ -39,6 +43,7 @@ export async function run() {
   let prepareCompleted = false;
   let prepareError: string | undefined;
   let kiroResult: KiroRunResult | undefined;
+  let commitResult: CommitAndPushResult | undefined;
   let containsTrigger = false;
 
   try {
@@ -86,7 +91,12 @@ export async function run() {
 
     prepared =
       mode === "tag"
-        ? await prepareTagMode({ context, octokit, githubToken })
+        ? await prepareTagMode({
+            context,
+            octokit,
+            githubToken,
+            commitMessageFile,
+          })
         : await prepareAgentMode({ context, octokit, githubToken });
 
     prepareCompleted = true;
@@ -115,6 +125,7 @@ export async function run() {
     kiroResult = await runKiro({
       kiroCommand,
       agentName: KIRO_AGENT_NAME,
+      engine: context.inputs.agentEngine,
       prompt: prepared.prompt,
       promptFile,
       outputFile,
@@ -126,6 +137,33 @@ export async function run() {
     });
 
     core.setOutput("execution_file", kiroResult.outputFile);
+
+    // Kiro has no shell in headless mode (tool trust is all-or-nothing there,
+    // so allowing `git add` would also allow `curl`), so the action commits and
+    // pushes whatever it changed. Only in tag mode: agent-mode workflows decide
+    // for themselves what to do with the working tree.
+    if (
+      mode === "tag" &&
+      kiroResult.reason === "success" &&
+      isEntityContext(context)
+    ) {
+      const branch =
+        prepared.branchInfo.kiroBranch || prepared.branchInfo.currentBranch;
+      validateBranchName(branch);
+      commitResult = commitAndPush({
+        branch,
+        messageFile: commitMessageFile,
+        fallbackSubject: `Apply changes from Kiro for ${
+          context.isPR ? "PR" : "issue"
+        } #${context.entityNumber}`,
+        coAuthorLine: prepared.coAuthorLine,
+      });
+      if (commitResult.changed && !commitResult.pushed) {
+        core.warning(
+          "Kiro changed files but they could not be pushed; see the log above.",
+        );
+      }
+    }
 
     if (kiroResult.reason === "mcp_startup_failure") {
       throw new Error(

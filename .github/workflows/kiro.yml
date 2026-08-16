@@ -45,9 +45,9 @@ jobs:
         uses: ./
         with:
           kiro_api_key: ${{ secrets.KIRO_API_KEY }}
-          # This repository's own checks, so Kiro can verify its work.
-          allowed_shell_commands: "bun install,bun test *,bun run typecheck,bun run format:check"
           timeout_minutes: 20
+          # No allowed_shell_commands: the default engine ignores it, and this
+          # workflow needs the tracking comment that the v3 engine gives up.
 
       - name: Upload the CLI output
         if: always() && steps.kiro.outputs.execution_file != ''

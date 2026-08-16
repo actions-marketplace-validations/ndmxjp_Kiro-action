@@ -39,6 +39,7 @@ jobs:
       - uses: takuaizu/Kiro-action@v0
         with:
           kiro_api_key: ${{ secrets.KIRO_API_KEY }}
-          # Let Kiro verify its own work before it pushes.
-          allowed_shell_commands: "bun install,bun test *,bun run lint"
           timeout_minutes: 20
+          # Kiro gets no shell here, so it cannot run your tests: on the default
+          # engine the CLI cannot scope shell access. The action commits and
+          # pushes whatever it edited. See docs/security.md.

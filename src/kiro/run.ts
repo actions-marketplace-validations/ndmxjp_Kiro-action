@@ -47,6 +47,8 @@ export type KiroRunResult = {
 export type RunKiroParams = {
   kiroCommand: string;
   agentName: string;
+  /** "v3" adds --v3, selecting the KAS agent engine. */
+  engine: "v2" | "v3";
   prompt: string;
   promptFile: string;
   outputFile: string;
@@ -61,6 +63,7 @@ export async function runKiro(params: RunKiroParams): Promise<KiroRunResult> {
   const {
     kiroCommand,
     agentName,
+    engine,
     prompt,
     promptFile,
     outputFile,
@@ -76,6 +79,7 @@ export async function runKiro(params: RunKiroParams): Promise<KiroRunResult> {
   const args = [
     "chat",
     "--no-interactive",
+    ...(engine === "v3" ? ["--v3"] : []),
     "--agent",
     agentName,
     ...(requireMcpStartup ? ["--require-mcp-startup"] : []),

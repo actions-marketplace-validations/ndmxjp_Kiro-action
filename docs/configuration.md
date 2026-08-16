@@ -84,36 +84,54 @@ the run.
 The Kiro CLI has no `--mcp-config` flag, so the action writes a custom agent
 config to `~/.kiro/agents/kiro-action.json` and runs
 `kiro-cli chat --no-interactive --agent kiro-action`. That file carries the MCP
-servers, the tool list, and the permission rules for the run.
+servers and the tool list for the run.
 
 It is written to the home directory rather than the repository's `.kiro/agents/`
 on purpose: the checkout is untrusted on a pull request, and a file inside it
-would also be swept up by a `git add -A`.
+would also be swept up by the `git add -A` this action makes later.
 
 Granted by default:
 
-- `read`, `glob`, `grep`, `todo`, `thinking`, `report` — read-only built-ins.
-- `write`, `code` — file editing.
-- `shell`, but only for these commands: `git status`, `git diff`, `git log`,
-  `git show`, `git rev-parse`, `git ls-files`, `git add`, `git commit`, `git rm`,
-  and the action's push wrapper. Anything else falls through to an approval
-  prompt, and a prompt in `--no-interactive` mode is a denial.
+- `fs_read`, `grep`, `glob` — reading and searching.
+- `fs_write`, `code` — file editing.
 - Every tool of the MCP servers the action starts:
   - `github_comment` (tag mode) — `update_kiro_comment`, which rewrites the
     tracking comment. This is the only way Kiro can say anything to a human.
   - `github_ci` (tag mode, pull requests, requires `actions: read`) —
     `get_ci_status`, `get_workflow_run_details`, `download_job_log`.
 
-To let Kiro run your test suite, grant it explicitly:
+**No shell.** The agent cannot run git, tests, or anything else. In headless mode
+the CLI's tool trust is all-or-nothing — granting `git add` also grants `curl` —
+so this action grants no shell and commits and pushes on the agent's behalf after
+the run. It asks the agent to leave a commit message in a file under
+`$RUNNER_TEMP`; if none is there, a generated subject is used. The measurements
+behind this are in [security.md](security.md).
+
+If `actions: read` is missing from the job's `permissions`, the CI server is
+skipped with a warning rather than failing the run.
+
+## Choosing an engine
+
+|                                 | `agent_engine: v2` (default) | `agent_engine: v3`   |
+| ------------------------------- | ---------------------------- | -------------------- |
+| Tracking comment (MCP)          | works                        | **does not work**    |
+| `allowed_shell_commands`        | ignored                      | enforced per command |
+| Writes confined to the checkout | no                           | yes                  |
+
+Use the default for anything that reports back to an issue or pull request. Use
+`v3` for agent-mode automation that needs to run commands:
 
 ```yaml
 with:
   kiro_api_key: ${{ secrets.KIRO_API_KEY }}
+  agent_engine: v3
   allowed_shell_commands: "bun install,bun test *,bun run lint"
+  prompt: |
+    Fix the failing tests. Run `bun test` to check your work.
 ```
 
-If `actions: read` is missing from the job's `permissions`, the CI server is
-skipped with a warning rather than failing the run.
+`curl`, `wget`, `sudo`, `rm -rf`, `nc`, and `ssh` are denied on v3 regardless of
+what `allowed_shell_commands` says, because a deny rule outranks an allow rule.
 
 ## Custom MCP servers
 
