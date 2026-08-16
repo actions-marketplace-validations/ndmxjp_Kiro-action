@@ -417,3 +417,74 @@ jobs:
           }
           JSON
           kiro-cli chat --no-interactive --agent probe-u "List every tool name you can see, one per line. Then call echo_probe with text=hello and report exactly what it returned, or quote the refusal." || echo "EXIT=$?"
+
+      - name: "Case X — V2: toolsSettings in the documented plain form, tool NOT trusted"
+        run: |
+          rm -f ~/.kiro/settings/mcp.json
+          cat > ~/.kiro/agents/probe-x.json <<'JSON'
+          {
+            "name": "probe-x",
+            "description": "V2: allowedCommands without trusting the tool",
+            "prompt": "You are running in CI. Attempt what you are asked and report each outcome verbatim.",
+            "mcpServers": {},
+            "tools": ["fs_read", "grep", "glob", "execute_bash"],
+            "allowedTools": ["fs_read", "grep", "glob"],
+            "toolsSettings": {
+              "shell": {
+                "allowedCommands": ["git status.*", "git add .*", "git commit .*"],
+                "deniedCommands": ["curl .*", "sudo .*"],
+                "autoAllowReadonly": true
+              }
+            }
+          }
+          JSON
+          kiro-cli agent validate --path ~/.kiro/agents/probe-x.json || true
+          kiro-cli chat --no-interactive --agent probe-x "Attempt both and report each outcome, quoting refusals verbatim: 1. Run the shell command: git status --short  2. Run the shell command: curl -s https://example.com" || echo "EXIT=$?"
+
+      - name: "Case Y — V2: exact allowedCommands entry, exact command asked for"
+        run: |
+          cat > ~/.kiro/agents/probe-y.json <<'JSON'
+          {
+            "name": "probe-y",
+            "description": "V2: exact-match allowedCommands",
+            "prompt": "You are running in CI. Run exactly the command you are asked for and report the outcome verbatim.",
+            "mcpServers": {},
+            "tools": ["fs_read", "execute_bash"],
+            "allowedTools": ["fs_read"],
+            "toolsSettings": {
+              "shell": { "allowedCommands": ["git status"], "denyByDefault": true }
+            }
+          }
+          JSON
+          kiro-cli chat --no-interactive --agent probe-y "Run exactly this shell command, with no flags: git status — then report the outcome, quoting any refusal verbatim." || echo "EXIT=$?"
+
+      - name: "Case Z — V2: is the shell tool needed at all if an MCP server runs the command?"
+        run: |
+          mkdir -p /tmp/mcp3
+          cat > /tmp/mcp3/server.mjs <<'MJS'
+          // Stands in for a narrow, action-owned tool: it runs one fixed command
+          // and nothing else, so trusting the whole server is still safe.
+          import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+          import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+          import { execFileSync } from "child_process";
+          const server = new McpServer({ name: "checks", version: "0.0.1" });
+          server.tool("run_repo_checks", "Run the repository's checks", {}, async () => {
+            const out = execFileSync("git", ["status", "--short"], { encoding: "utf8" });
+            return { content: [{ type: "text", text: `git status --short:\n${out || "(clean)"}` }] };
+          });
+          await server.connect(new StdioServerTransport());
+          MJS
+          cd /tmp/mcp3 && npm install --no-audit --no-fund @modelcontextprotocol/sdk zod >/dev/null 2>&1
+          cd "$GITHUB_WORKSPACE"
+          cat > ~/.kiro/agents/probe-z.json <<'JSON'
+          {
+            "name": "probe-z",
+            "description": "V2: narrow MCP tool instead of shell",
+            "prompt": "You are running in CI. Use the tools you have and report the outcome verbatim.",
+            "mcpServers": { "checks": { "command": "node", "args": ["/tmp/mcp3/server.mjs"] } },
+            "tools": ["fs_read", "@checks"],
+            "allowedTools": ["fs_read", "@checks"],
+            "includeMcpJson": false
+          }
+          JSON
+          kiro-cli chat --no-interactive --require-mcp-startup --agent probe-z "Call run_repo_checks and report exactly what it returned, or quote the refusal." || echo "EXIT=$?"
