@@ -323,3 +323,97 @@ jobs:
           }
           JSON
           kiro-cli chat --no-interactive --require-mcp-startup --agent probe-mcp-r "First list every tool name you can see. Then call echo_probe with text=hello and report exactly what it returned, or quote the refusal." || echo "EXIT=$?"
+
+      - name: "Case S — V3: mcpServers present, tools lists only built-ins"
+        run: |
+          cat > ~/.kiro/agents/probe-s.json <<'JSON'
+          {
+            "name": "probe-s",
+            "description": "V3: mcpServers plus a built-in-only tools list",
+            "prompt": "You are running in CI. List every tool name you can see, then do what you are asked.",
+            "mcpServers": { "probe": { "command": "node", "args": ["/tmp/mcp2/server.mjs"] } },
+            "tools": ["fs_read", "grep"],
+            "permissions": {
+              "rules": [
+                { "capability": "fs_read", "effect": "allow" },
+                { "capability": "mcp", "match": ["probe/*"], "effect": "allow" }
+              ]
+            },
+            "includeMcpJson": false
+          }
+          JSON
+          kiro-cli chat --v3 --no-interactive --agent probe-s "List every tool name you can see, one per line. Then try to call echo_probe with text=hello and report the result or the refusal." || echo "EXIT=$?"
+
+      - name: "Case T — V3: no mcpServers and no tools field (is an absent tools list empty?)"
+        run: |
+          cat > ~/.kiro/agents/probe-t.json <<'JSON'
+          {
+            "name": "probe-t",
+            "description": "V3: no mcpServers, no tools field",
+            "prompt": "You are running in CI. List every tool name you can see.",
+            "permissions": {
+              "rules": [{ "capability": "fs_read", "effect": "allow" }]
+            }
+          }
+          JSON
+          kiro-cli chat --v3 --no-interactive --agent probe-t "List every tool name you can see, one per line." || echo "EXIT=$?"
+
+      - name: "Case U — V3: server declared in ~/.kiro/settings/mcp.json with includeMcpJson"
+        run: |
+          mkdir -p ~/.kiro/settings
+          cat > ~/.kiro/settings/mcp.json <<'JSON'
+          {
+            "mcpServers": {
+              "probe": { "command": "node", "args": ["/tmp/mcp2/server.mjs"] }
+            }
+          }
+          JSON
+          cat > ~/.kiro/agents/probe-u.json <<'JSON'
+          {
+            "name": "probe-u",
+            "description": "V3: MCP via mcp.json",
+            "prompt": "You are running in CI. List every tool name you can see, then do what you are asked.",
+            "tools": ["fs_read", "grep"],
+            "includeMcpJson": true,
+            "permissions": {
+              "rules": [
+                { "capability": "fs_read", "effect": "allow" },
+                { "capability": "mcp", "match": ["probe/*"], "effect": "allow" }
+              ]
+            }
+          }
+          JSON
+          kiro-cli chat --v3 --no-interactive --agent probe-u "List every tool name you can see, one per line. Then call echo_probe with text=hello and report exactly what it returned, or quote the refusal." || echo "EXIT=$?"
+
+      - name: "Case V — V3: tools uses the @server tag form"
+        run: |
+          rm -f ~/.kiro/settings/mcp.json
+          cat > ~/.kiro/agents/probe-v.json <<'JSON'
+          {
+            "name": "probe-v",
+            "description": "V3: @server tag in tools",
+            "prompt": "You are running in CI. List every tool name you can see, then do what you are asked.",
+            "mcpServers": { "probe": { "command": "node", "args": ["/tmp/mcp2/server.mjs"] } },
+            "tools": ["fs_read", "grep", "@probe"],
+            "permissions": {
+              "rules": [
+                { "capability": "fs_read", "effect": "allow" },
+                { "capability": "mcp", "effect": "allow" }
+              ]
+            },
+            "includeMcpJson": false
+          }
+          JSON
+          kiro-cli chat --v3 --no-interactive --agent probe-v "List every tool name you can see, one per line. Then call echo_probe with text=hello and report exactly what it returned, or quote the refusal." || echo "EXIT=$?"
+
+      - name: "Case W — V2 baseline for the same mcp.json wiring"
+        run: |
+          mkdir -p ~/.kiro/settings
+          cat > ~/.kiro/settings/mcp.json <<'JSON'
+          {
+            "mcpServers": {
+              "probe": { "command": "node", "args": ["/tmp/mcp2/server.mjs"] }
+            }
+          }
+          JSON
+          kiro-cli chat --no-interactive --agent probe-u "List every tool name you can see, one per line. Then call echo_probe with text=hello and report exactly what it returned, or quote the refusal." || echo "EXIT=$?"
