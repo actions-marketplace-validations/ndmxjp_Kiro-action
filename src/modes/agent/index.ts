@@ -6,7 +6,7 @@ import type { GitHubContext } from "../../github/context";
 import type { Octokits } from "../../github/api/client";
 import {
   buildAgentConfig,
-  willGrantShell,
+  grantedShellCommands,
   writeAgentConfig,
 } from "../../kiro/agent-config";
 import { writeUserMcpJson } from "../../kiro/mcp-json";
@@ -61,11 +61,9 @@ export async function prepareAgentMode({
     await writeUserMcpJson(mcpServers);
   }
 
-  const hasShell = willGrantShell({
-    engine: context.inputs.agentEngine,
-    extraTools: context.inputs.allowedTools,
-    extraShellCommands: context.inputs.allowedShellCommands,
-  });
+  const shellCommands = grantedShellCommands(
+    context.inputs.allowedShellCommands,
+  );
 
   const agentConfig = buildAgentConfig({
     mode: "agent",
@@ -74,7 +72,7 @@ export async function prepareAgentMode({
     extraTools: context.inputs.allowedTools,
     extraShellCommands: context.inputs.allowedShellCommands,
     model: context.inputs.model,
-    systemPrompt: buildSystemPrompt("agent", hasShell),
+    systemPrompt: buildSystemPrompt("agent", shellCommands),
   });
   const agentPath = await writeAgentConfig(agentConfig);
 

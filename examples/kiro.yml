@@ -40,6 +40,7 @@ jobs:
         with:
           kiro_api_key: ${{ secrets.KIRO_API_KEY }}
           timeout_minutes: 20
-          # Kiro gets no shell here, so it cannot run your tests: on the default
-          # engine the CLI cannot scope shell access. The action commits and
-          # pushes whatever it edited. See docs/security.md.
+          # Commands Kiro may run, so it can check its own work. Read-only git is
+          # always allowed; everything else has to be listed here. The action
+          # does the committing and pushing. See docs/security.md.
+          allowed_shell_commands: "bun install,bun test *,bun run lint"

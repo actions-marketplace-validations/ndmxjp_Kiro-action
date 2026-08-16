@@ -6,10 +6,11 @@ import type { McpServers } from "../mcp/prepare-mcp-config";
 import type { AutoDetectedMode } from "../modes/detector";
 
 /**
- * Hardened push wrapper. The agent has no shell by default (see below), so this
- * is only reachable by a workflow that opts into `shell` via `allowed_tools`;
- * it is kept because `git push` with arbitrary arguments is remote code
- * execution (`git push --receive-pack='sh -c ...' ext::sh origin`).
+ * Hardened push wrapper. Pushing is done by the action itself, so this is only
+ * reachable by a workflow that allows it explicitly; it exists because `git push`
+ * with arbitrary arguments is remote code execution
+ * (`git push --receive-pack='sh -c ...' ext::sh origin`), which is why the deny
+ * list below blocks plain `git push`.
  *
  * Normalized with resolve(): `GITHUB_ACTION_PATH` ends in `/.` when the action
  * is used as `uses: ./`, which would otherwise yield a doubled slash.
@@ -29,26 +30,102 @@ const READ_TOOLS = ["fs_read", "grep", "glob"];
 const WRITE_TOOLS = ["fs_write", "code"];
 
 /**
- * The shell tool, deliberately not granted by default.
+ * The shell tool. Present in `tools` but never in `allowedTools`, which is what
+ * makes per-command scoping work.
  *
  * Measured on kiro-cli 2.18.1 in `--no-interactive` mode (see
  * .github/workflows/kiro-perm-probe.yml):
  *
- *   - Only tools trusted wholesale run at all. Anything else is refused with
- *     "non-interactive mode (no user to approve)", because there is no one to
- *     prompt — this includes commands the interactive default policy allows,
- *     such as `git status`.
  *   - Trusting a tool *overrides* its `toolsSettings`. Trusting `execute_bash`
- *     with `allowedCommands: ["^git .*$"]` still ran `curl`, and the CLI says so:
+ *     ran `curl` despite an `allowedCommands` list, and the CLI says so out loud:
  *     "You have trusted execute_bash tool, which overrides the toolsSettings".
+ *     So the tool must stay untrusted for the settings to apply.
+ *   - Left untrusted, `toolsSettings.shell` decides: `git status --short` ran and
+ *     `curl` was refused, naming the rule it matched ("Blocked patterns:
+ *     - curl .*"). Anything neither allowed nor auto-approved is refused with
+ *     "non-interactive mode (no user to approve)".
  *
- * So headless shell access is all-or-nothing: there is no way to allow `git add`
- * without also allowing `curl`. Rather than hand the model an unrestricted
- * shell, this action gives it no shell and performs the commit and push itself
- * (src/git/commit.ts). A workflow can opt in with `allowed_tools: execute_bash`,
- * which is documented as unrestricted.
+ * The patterns are regular expressions that the CLI anchors with \A and \z, and
+ * look-around is not supported. Writing them as "^git status.*$" does not match —
+ * that mistake is what made an earlier round of testing conclude, wrongly, that
+ * scoping was impossible here.
  */
 const SHELL_TOOL = "execute_bash";
+
+/**
+ * Read-only git commands the agent may always run, as command prefixes. They are
+ * repo-scoped and side-effect free, and they are what lets it inspect a pull
+ * request's own diff.
+ *
+ * Kept as prefixes because the two engines want different notations: v2 takes
+ * anchored regexes, v3 takes globs.
+ */
+const DEFAULT_SHELL_PREFIXES = [
+  "git status",
+  "git diff",
+  "git log",
+  "git show",
+  "git rev-parse",
+  "git ls-files",
+  "git branch",
+];
+
+/**
+ * Commands refused regardless of what a workflow allows, since deny is evaluated
+ * before allow.
+ *
+ * `git config` and `git remote` are here because the push URL carries the GitHub
+ * token; `git push` because the wrapper script exists precisely to stop arbitrary
+ * push arguments.
+ */
+const DENIED_SHELL_PREFIXES = [
+  "curl",
+  "wget",
+  "sudo",
+  "rm -rf",
+  "nc",
+  "ssh",
+  "git push",
+  "git config",
+  "git remote",
+];
+
+/**
+ * Translates a user-supplied command pattern into the regex form the CLI wants.
+ *
+ * The input is documented as glob-like ("bun test *") because that is what the
+ * v3 engine takes; v2 takes anchored regexes, so metacharacters are escaped and
+ * only `*` keeps its wildcard meaning.
+ */
+export function shellPatternToRegex(pattern: string): string {
+  return pattern
+    .split("*")
+    .map((part) => part.replace(/[.+?^${}()|[\]\\]/g, "\\$&"))
+    .join(".*");
+}
+
+/**
+ * A command prefix as a v2 regex: the bare command, or the command followed by
+ * arguments. Written as `nc( .*)?` rather than `nc.*` so it cannot also match an
+ * unrelated command that merely starts with those letters, like `ncdu`.
+ */
+function prefixToRegex(prefix: string): string {
+  return `${shellPatternToRegex(prefix)}( .*)?`;
+}
+
+/** The same prefix as v3 globs, which have no alternation. */
+function prefixToGlobs(prefix: string): string[] {
+  return [prefix, `${prefix} *`];
+}
+
+export type ToolsSettings = {
+  write?: { allowedPaths?: string[]; deniedPaths?: string[] };
+  shell?: {
+    allowedCommands?: string[];
+    deniedCommands?: string[];
+    denyByDefault?: boolean;
+  };
+};
 
 export type AgentEngine = "v2" | "v3";
 
@@ -84,6 +161,11 @@ export type KiroAgentConfig = {
    */
   includeMcpJson: boolean;
   /**
+   * Per-command and per-path limits, honoured by the v2 engine for tools that are
+   * *not* in `allowedTools`. Ignored by v3, which uses `permissions` instead.
+   */
+  toolsSettings?: ToolsSettings;
+  /**
    * Capability rules, honoured only by the v3 agent engine. On v2 they are
    * ignored, which is why `allowedTools` above carries the real policy there.
    */
@@ -104,7 +186,7 @@ export type BuildAgentConfigParams = {
   mcpServers: McpServers;
   /** Comma-separated extra tool names from the `allowed_tools` input. */
   extraTools: string;
-  /** Comma-separated shell patterns from `allowed_shell_commands` (v3 only). */
+  /** Comma-separated shell patterns from `allowed_shell_commands`. */
   extraShellCommands: string;
   model: string;
   systemPrompt: string;
@@ -125,30 +207,28 @@ export function buildAgentConfig({
   const extra = parseList(extraTools);
   const shellPatterns = parseList(extraShellCommands);
 
-  // On v3, scoped shell is possible, so allowed_shell_commands can be honoured
-  // and the shell tool is granted when the workflow asked for commands. On v2
-  // there is no scoping, so the input cannot be honoured and shell is only
-  // granted when explicitly named in allowed_tools.
-  const grantShell = engine === "v3" && shellPatterns.length > 0;
-
-  const granted = [
+  // Available to the model, but scoped: the write tool by path and the shell tool
+  // by command. Both are deliberately absent from `allowedTools` below, because
+  // trusting a tool overrides the very settings that scope it.
+  const tools = [
     ...READ_TOOLS,
     ...WRITE_TOOLS,
+    SHELL_TOOL,
     ...mcpToolNames,
-    ...(grantShell ? [SHELL_TOOL] : []),
     ...extra,
   ];
+
+  // Trusted outright: reading and searching, which are side-effect free, plus
+  // this action's own MCP servers, whose tools do exactly one thing each.
+  const trusted = [...READ_TOOLS, ...mcpToolNames, ...extra];
 
   return {
     name: KIRO_AGENT_NAME,
     description: `GitHub Actions agent (${mode} mode) created by kiro-action`,
     prompt: systemPrompt,
     mcpServers,
-    // `tools` and `allowedTools` are the same list on purpose: on v2 a tool that
-    // is available but not granted cannot run at all, so listing it separately
-    // would only mislead the model into trying it.
-    tools: dedupe(granted),
-    allowedTools: dedupe(granted),
+    tools: dedupe(tools),
+    allowedTools: dedupe(trusted),
     includeMcpJson: engine === "v3",
     ...(engine === "v3"
       ? {
@@ -156,8 +236,33 @@ export function buildAgentConfig({
             rules: buildV3Rules(shellPatterns, Object.keys(mcpServers)),
           },
         }
-      : {}),
+      : { toolsSettings: buildV2ToolsSettings(shellPatterns) }),
     ...(model ? { model } : {}),
+  };
+}
+
+/**
+ * Per-tool limits for the v2 engine, which enforces them for untrusted tools.
+ *
+ * Measured: with the write tool untrusted and `allowedPaths: ["./**"]`, a write
+ * inside the checkout succeeded and one to /tmp was refused; with the shell tool
+ * untrusted, `git status --short` and `git add` ran while `curl` was refused by
+ * name. `denyByDefault` makes anything unlisted a refusal rather than a prompt,
+ * which in headless mode is the same outcome but a clearer one.
+ */
+function buildV2ToolsSettings(shellPatterns: string[]): ToolsSettings {
+  return {
+    // Confine writes to the checkout. Without this the agent could write to
+    // $HOME, and from there to its own configuration.
+    write: { allowedPaths: ["./**"] },
+    shell: {
+      allowedCommands: [
+        ...DEFAULT_SHELL_PREFIXES.map(prefixToRegex),
+        ...shellPatterns.map(shellPatternToRegex),
+      ],
+      deniedCommands: DENIED_SHELL_PREFIXES.map(prefixToRegex),
+      denyByDefault: true,
+    },
   };
 }
 
@@ -190,43 +295,39 @@ function buildV3Rules(
     });
   }
 
-  if (shellPatterns.length > 0) {
-    rules.push({ capability: "shell", match: shellPatterns, effect: "allow" });
-  }
+  rules.push({
+    capability: "shell",
+    match: [...DEFAULT_SHELL_PREFIXES.flatMap(prefixToGlobs), ...shellPatterns],
+    effect: "allow",
+  });
 
   // Deny wins over allow in every scope, so these hold even if a workflow
   // allows a broad pattern such as "bash *".
   rules.push({
     capability: "shell",
-    match: ["curl *", "wget *", "sudo *", "rm -rf *", "nc *", "ssh *"],
+    match: DENIED_SHELL_PREFIXES.flatMap(prefixToGlobs),
     effect: "deny",
   });
 
   return rules;
 }
 
-/** Whether the agent will end up with shell access, before the config is built. */
-export function willGrantShell({
-  engine,
-  extraTools,
-  extraShellCommands,
-}: {
-  engine: AgentEngine;
-  extraTools: string;
-  extraShellCommands: string;
-}): boolean {
-  if (
-    parseList(extraTools).some(
-      (tool) => tool === SHELL_TOOL || tool === "shell",
-    )
-  ) {
-    return true;
-  }
-  return engine === "v3" && parseList(extraShellCommands).length > 0;
+/**
+ * The shell commands the agent will be able to run, for the prompt to quote.
+ * Empty is impossible — the read-only git set is always granted.
+ */
+export function grantedShellCommands(extraShellCommands: string): string[] {
+  return [
+    ...DEFAULT_SHELL_PREFIXES.map((prefix) => `${prefix} …`),
+    ...parseList(extraShellCommands),
+  ];
 }
 
-/** Whether a built config grants shell access. */
-export function hasShellAccess(config: KiroAgentConfig): boolean {
+/**
+ * Whether the agent was handed an unrestricted shell, which only happens when a
+ * workflow names the tool in `allowed_tools` and so bypasses the scoping.
+ */
+export function hasUnscopedShell(config: KiroAgentConfig): boolean {
   return config.allowedTools.some(
     (tool) => tool === SHELL_TOOL || tool === "shell",
   );

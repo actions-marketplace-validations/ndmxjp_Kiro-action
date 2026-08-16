@@ -100,12 +100,26 @@ Granted by default:
   - `github_ci` (tag mode, pull requests, requires `actions: read`) —
     `get_ci_status`, `get_workflow_run_details`, `download_job_log`.
 
-**No shell.** The agent cannot run git, tests, or anything else. In headless mode
-the CLI's tool trust is all-or-nothing — granting `git add` also grants `curl` —
-so this action grants no shell and commits and pushes on the agent's behalf after
-the run. It asks the agent to leave a commit message in a file under
-`$RUNNER_TEMP`; if none is there, a generated subject is used. The measurements
-behind this are in [security.md](security.md).
+**Shell, limited to specific commands.** `git status`, `git diff`, `git log`,
+`git show`, `git rev-parse`, `git ls-files`, and `git branch` are always allowed, so
+the agent can inspect a pull request's own diff. Everything else is refused unless a
+workflow allows it:
+
+```yaml
+with:
+  kiro_api_key: ${{ secrets.KIRO_API_KEY }}
+  allowed_shell_commands: "bun install,bun test *,bun run lint"
+```
+
+`curl`, `wget`, `sudo`, `rm -rf`, `nc`, `ssh`, `git push`, `git config`, and
+`git remote` are always refused, whatever you allow — deny is evaluated first.
+
+**Writes are confined to the checkout.** A write outside it is refused.
+
+**Committing is the action's job.** `git add`, `git commit`, and `git push` are all
+denied to the agent; the action stages what it changed, commits it with the message
+the agent leaves in a file under `$RUNNER_TEMP`, and pushes. See
+[security.md](security.md) for how all of this is enforced and what was measured.
 
 If `actions: read` is missing from the job's `permissions`, the CI server is
 skipped with a warning rather than failing the run.
@@ -125,13 +139,8 @@ Use the default for anything that reports back to an issue or pull request. Use
 with:
   kiro_api_key: ${{ secrets.KIRO_API_KEY }}
   agent_engine: v3
-  allowed_shell_commands: "bun install,bun test *,bun run lint"
-  prompt: |
-    Fix the failing tests. Run `bun test` to check your work.
+  allowed_shell_commands: "bun install,bun test *"
 ```
-
-`curl`, `wget`, `sudo`, `rm -rf`, `nc`, and `ssh` are denied on v3 regardless of
-what `allowed_shell_commands` says, because a deny rule outranks an allow rule.
 
 ## Custom MCP servers
 

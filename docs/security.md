@@ -59,83 +59,82 @@ Consequences worth knowing:
   repo-relative script) still executes the PR's version. Keep restored hooks
   self-contained.
 
-## The agent has no shell
+## What the agent may run
 
-**The agent cannot run commands.** Not git, not the test suite, nothing. This is
-forced by how the Kiro CLI gates tools in headless mode, which was measured
-rather than assumed — see `.github/workflows/kiro-perm-probe.yml`, which runs the
-CLI directly across a matrix of configurations.
+The agent gets read and search tools outright, a **write tool confined to the
+checkout**, and a **shell limited to specific commands**. How that is enforced was
+measured rather than assumed — `.github/workflows/kiro-perm-probe.yml` runs the CLI
+directly across a matrix of configurations.
 
-On the **v2 engine** (the CLI default, and what `kiro-cli 2.18.1` runs):
+The mechanism on the v2 engine (the CLI default) is `toolsSettings`, and the
+essential detail is that **it only applies to tools that are not trusted**:
 
-| Configuration                                                     | `git status` | file write  | `curl`      |
-| ----------------------------------------------------------------- | ------------ | ----------- | ----------- |
-| nothing granted                                                   | denied       | denied      | denied      |
-| `allowedTools: [fs_read, fs_write]`                               | denied       | **allowed** | denied      |
-| `--trust-tools=execute_bash` with `allowedCommands: ["^git .*$"]` | allowed      | allowed     | **allowed** |
-| `--trust-all-tools`                                               | allowed      | allowed     | **allowed** |
+| Configuration                                       | `git status --short` | write in repo | write to /tmp | `curl`      |
+| --------------------------------------------------- | -------------------- | ------------- | ------------- | ----------- |
+| nothing granted                                     | denied               | denied        | denied        | denied      |
+| tools trusted via `allowedTools`                    | allowed              | allowed       | **allowed**   | allowed     |
+| `--trust-tools=execute_bash` with `allowedCommands` | allowed              | —             | —             | **allowed** |
+| `--trust-all-tools`                                 | allowed              | allowed       | allowed       | **allowed** |
+| **untrusted + `toolsSettings`**                     | **allowed**          | **allowed**   | **denied**    | **denied**  |
 
-Two things follow. First, anything not trusted wholesale is refused with
-"non-interactive mode (no user to approve)" — including commands the interactive
-default policy allows. Second, trusting a tool _overrides_ its `toolsSettings`,
-and the CLI says so out loud: "You have trusted execute_bash tool, which
-overrides the toolsSettings: allowedCommands". So on v2 there is no way to allow
-`git add` without also allowing `curl`.
+Trusting a tool overrides the settings that scope it, and the CLI says so out
+loud: "You have trusted execute_bash tool, which overrides the toolsSettings". So
+`fs_write` and `execute_bash` are listed in `tools` but deliberately left out of
+`allowedTools`. Anything neither allowed nor matched is refused with
+"non-interactive mode (no user to approve)", because there is nobody to prompt.
 
-Rather than hand an LLM an unrestricted shell on a repository, this action grants
-no shell and does the committing itself (`src/git/commit.ts`): it stages what
-Kiro changed, commits it with the message Kiro left in a file outside the
-checkout, and pushes. The commit message and author are therefore decided by the
-action, not by the model's shell quoting.
+Granted by default: `git status`, `git diff`, `git log`, `git show`,
+`git rev-parse`, `git ls-files`, `git branch`. Denied whatever a workflow asks
+for, since deny is evaluated first: `curl`, `wget`, `sudo`, `rm -rf`, `nc`, `ssh`,
+`git push`, `git config`, `git remote`. The last three matter because the push URL
+carries the GitHub token and because arbitrary `git push` arguments are remote code
+execution (`git push --receive-pack='sh -c ...' ext::sh origin`, the class of issue
+behind HackerOne #3556799 against the upstream action).
 
-`scripts/git-push.sh` is kept for the opt-in case (`allowed_tools: execute_bash`,
-which is unrestricted and documented as such). It accepts exactly
-`origin <branch|HEAD>`, rejects any argument starting with `-`, and validates the
-ref with `git check-ref-format`, because allowing `git push` with arbitrary
-arguments is remote code execution: `git push --receive-pack='sh -c ...' ext::sh
-origin` runs a shell. The upstream project fixed the same issue after HackerOne
-report #3556799.
+`allowed_shell_commands` extends the allow list — `bun test *` and the like. The
+patterns are regexes on v2, which the CLI anchors with `\A` and `\z`; the input is
+accepted in glob form and translated, so a workflow never has to know that. Writing
+them pre-anchored as `^git status.*$` matches nothing, which is what made an
+earlier round of testing here conclude, wrongly, that scoping was impossible.
 
-## The v3 engine trades the comment for a real policy
+## Committing is done by the action, not the agent
+
+`git push`, `git commit`, and `git add` are all denied to the agent. It edits files;
+afterwards the action stages what changed, commits it with the message the agent
+left in a file under `$RUNNER_TEMP`, and pushes (`src/git/commit.ts`). The commit
+message and author are therefore decided by this action rather than by the model's
+shell quoting, and the push never goes through a command the model composed.
+
+`scripts/git-push.sh` remains for the opt-in case: a workflow that puts
+`execute_bash` in `allowed_tools` bypasses the scoping entirely and gets an
+unrestricted shell, which is documented as such.
+
+## The v3 engine is equivalent, and optional
 
 The CLI also ships a newer engine, reachable as `kiro-cli chat --v3` and exposed
-here as `agent_engine: v3`. Measured on the same build:
+here as `agent_engine: v3`. It enforces the same limits through `permissions.rules`
+instead of `toolsSettings`, and this action emits whichever schema matches the
+engine — never both, since handing v2 a config with a `permissions` block made it
+drop the config entirely ("no agent with name … found. Falling back to user
+specified default").
 
-|                                   | v2 (default)        | v3                            |
-| --------------------------------- | ------------------- | ----------------------------- |
-| MCP servers declared by the agent | work                | **ignored entirely**          |
-| `shell` allow rules per command   | ignored             | **enforced**                  |
-| `fs_write` confined to a path     | overridden by trust | **enforced**                  |
-| `--require-mcp-startup`           | fails as documented | no effect (no servers loaded) |
+Two v3 quirks are worth knowing, both measured:
 
-On v3, a rule allowing `git add *` and `git commit *` really did permit exactly
-those, a `deny` rule blocked `curl` while naming the agent profile as its source,
-and `fs_write` scoped to `./**` blocked a write to `/tmp`. That is the policy
-this action would prefer.
+- It ignores `mcpServers` declared inside an agent profile. The same server in
+  `~/.kiro/settings/mcp.json` with `includeMcpJson: true` works, so that is where
+  this action writes them on v3 — which also merges the checkout's copy, hence the
+  config restore above. The nearest upstream reports are kirodotdev/Kiro#7349
+  (inline servers ignored over ACP, closed) and #7425 (not loaded in 2.0.0's
+  default mode, open); the v3 case does not appear to be reported.
+- The CLI exits after answering but the KAS server it starts as a grandchild keeps
+  running and holds the output pipes, which would keep this action's own process
+  from exiting. The CLI is therefore started in its own process group, and the
+  group is signalled and the pipes released once the run is over.
 
-MCP needs different wiring there. With the server declared inside the agent
-profile, the model could not see the tool at all; with the identical server in
-`~/.kiro/settings/mcp.json` and `includeMcpJson: true`, it saw
-`mcp_probe_echo_probe` and the call returned. So when `agent_engine: v3` is set,
-this action writes its servers to that user-scoped file instead. The nearest
-upstream reports are kirodotdev/Kiro#7349 (inline servers ignored over ACP,
-closed) and #7425 (servers not loaded in 2.0.0's default mode, open); the v3 case
-does not appear to be reported yet.
-
-v3 also leaves a process behind. The CLI itself exits after answering, but the KAS
-server it starts as a grandchild keeps running and holds the output pipes open —
-enough to keep this action's own process from exiting, so a run would finish its
-work and then hang until the job timed out. The CLI is therefore started in its
-own process group, and the group is signalled and the pipes released once the run
-is over.
-
-v3 is not the default anyway, for these reasons: the docs label CLI 3.0 early
-access, `includeMcpJson: true` also merges the checkout's
-`.kiro/settings/mcp.json` (which is why the config restore matters), and the
-engine's registry is fragile in ways others have hit — kirodotdev/Kiro#10733
-reports it silently dropping any agent config without a `permissions` block while
-`agent validate` still exits 0. Use it for agent-mode automation that needs to
-run commands.
+v3 is not the default because 3.0 is documented as early access, `includeMcpJson`
+widens what gets loaded, and its registry is fragile in ways others have hit —
+kirodotdev/Kiro#10733 has it silently dropping any agent config without a
+`permissions` block while `agent validate` still exits 0.
 
 ## Credentials
 
@@ -156,19 +155,17 @@ run commands.
 
 These are real limitations, not oversights:
 
-1. **On v2, file writes are not path-scoped.** Granting `fs_write` grants it
-   everywhere: trusting a tool overrides the `allowedPaths` setting that would
-   otherwise confine it. A prompt injection that gets the model to write outside
-   the checkout — into `$HOME`, say — is not blocked. Runners are ephemeral,
-   which limits the blast radius, but do not run this on a long-lived
-   self-hosted runner that holds other secrets. `agent_engine: v3` closes this
-   (a write to `/tmp` was refused in testing), at the cost of the tracking
-   comment.
-2. **The agent cannot verify its own work.** With no shell it cannot run the test
-   suite or the linter, so every change it proposes is unverified. The prompt
-   tells it to say so. Keep required status checks on protected branches.
-3. **`trust_all_tools: true` disables gating.** It is an escape hatch for trusted
-   automation only; on any engine it allows arbitrary commands.
+1. **The agent cannot verify its own work unless you let it.** Out of the box it
+   can read and inspect git history but not run your test suite, so a change it
+   proposes is unverified; the prompt tells it to say so. Grant what it needs with
+   `allowed_shell_commands` — and remember that whatever you grant, a prompt
+   injection can also reach.
+2. **A denied command is only denied by pattern.** The allow and deny lists match
+   command text, so a granted command that itself takes arbitrary arguments (a
+   task runner, `bash -c`, a script that shells out) widens the hole as far as that
+   command goes. Grant specific commands, not interpreters.
+3. **`trust_all_tools: true`, and naming `execute_bash` in `allowed_tools`, both
+   disable the scoping.** They are escape hatches for trusted automation only.
 4. **No commit signing.** The upstream action can commit through the GitHub API so
    commits are signed; this port commits with the git CLI, so commits are
    unsigned. A branch protection rule requiring signed commits will reject them.

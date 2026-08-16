@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
   buildAgentConfig,
-  hasShellAccess,
-  willGrantShell,
+  grantedShellCommands,
+  hasUnscopedShell,
+  shellPatternToRegex,
   type BuildAgentConfigParams,
 } from "../src/kiro/agent-config";
 import { parseAdditionalPermissions } from "../src/github/token";
@@ -34,13 +35,42 @@ describe("buildAgentConfig on the v2 engine", () => {
     expect(built.mcpServers).toBe(mcpServers);
   });
 
-  test("grants read and write tools but no shell", () => {
+  test("leaves write and shell untrusted, which is what makes scoping apply", () => {
+    // Measured: trusting a tool overrides its toolsSettings, and the CLI warns
+    // "You have trusted execute_bash tool, which overrides the toolsSettings".
     const built = config();
 
-    expect(built.allowedTools).toContain("fs_read");
-    expect(built.allowedTools).toContain("fs_write");
+    expect(built.tools).toContain("fs_write");
+    expect(built.tools).toContain("execute_bash");
+    expect(built.allowedTools).not.toContain("fs_write");
     expect(built.allowedTools).not.toContain("execute_bash");
-    expect(hasShellAccess(built)).toBe(false);
+    expect(hasUnscopedShell(built)).toBe(false);
+  });
+
+  test("confines writes to the checkout", () => {
+    expect(config().toolsSettings?.write).toEqual({ allowedPaths: ["./**"] });
+  });
+
+  test("allows read-only git and denies the dangerous commands", () => {
+    const shell = config().toolsSettings?.shell;
+
+    expect(shell?.allowedCommands).toContain("git status( .*)?");
+    expect(shell?.allowedCommands).toContain("git diff( .*)?");
+    expect(shell?.denyByDefault).toBe(true);
+    expect(shell?.deniedCommands).toContain("curl( .*)?");
+    // The push URL carries the token, and the wrapper exists to stop arbitrary
+    // push arguments.
+    expect(shell?.deniedCommands).toContain("git push( .*)?");
+    expect(shell?.deniedCommands).toContain("git config( .*)?");
+  });
+
+  test("honours allowed_shell_commands, translated to the regex form", () => {
+    const shell = config({
+      extraShellCommands: "bun test *, bun run build",
+    }).toolsSettings?.shell;
+
+    expect(shell?.allowedCommands).toContain("bun test .*");
+    expect(shell?.allowedCommands).toContain("bun run build");
   });
 
   test("emits no capability rules — v2 drops a config that carries them", () => {
@@ -50,28 +80,41 @@ describe("buildAgentConfig on the v2 engine", () => {
     expect(config().permissions).toBeUndefined();
   });
 
-  test("does not merge mcp.json, which the checkout can control", () => {
-    expect(config().includeMcpJson).toBe(false);
-  });
-
-  test("ignores allowed_shell_commands, because v2 cannot scope shell", () => {
-    const built = config({ extraShellCommands: "bun test *" });
-
-    expect(hasShellAccess(built)).toBe(false);
-    expect(built.permissions).toBeUndefined();
-  });
-
-  test("still grants shell when a workflow names it in allowed_tools", () => {
+  test("still hands over an unrestricted shell if a workflow insists", () => {
     const built = config({ extraTools: "execute_bash" });
 
-    expect(hasShellAccess(built)).toBe(true);
+    expect(hasUnscopedShell(built)).toBe(true);
+  });
+});
+
+describe("shellPatternToRegex", () => {
+  test("turns a glob into an anchored-regex equivalent", () => {
+    expect(shellPatternToRegex("bun test *")).toBe("bun test .*");
   });
 
-  test("grants every tool it lists, since an ungranted tool cannot run headlessly", () => {
-    const built = config({ extraTools: "web_search" });
+  test("escapes regex metacharacters that appear in real commands", () => {
+    expect(shellPatternToRegex("npm run build:prod")).toBe(
+      "npm run build:prod",
+    );
+    expect(shellPatternToRegex("grep -E (a|b) *")).toBe(
+      "grep -E \\(a\\|b\\) .*",
+    );
+  });
 
-    expect(built.tools).toEqual(built.allowedTools);
-    expect(built.allowedTools).toContain("web_search");
+  test("does not add its own anchors, which the CLI supplies", () => {
+    const pattern = shellPatternToRegex("git status *");
+    expect(pattern.startsWith("^")).toBe(false);
+    expect(pattern.endsWith("$")).toBe(false);
+  });
+});
+
+describe("grantedShellCommands", () => {
+  test("always includes the read-only git set", () => {
+    expect(grantedShellCommands("")).toContain("git status …");
+  });
+
+  test("appends what the workflow allowed, for the prompt to quote", () => {
+    expect(grantedShellCommands("bun test *")).toContain("bun test *");
   });
 });
 
@@ -119,20 +162,22 @@ describe("buildAgentConfig on the v3 engine", () => {
       (rule) => rule.capability === "shell" && rule.effect === "allow",
     );
 
-    expect(allow?.match).toEqual(["bun test *", "git add *"]);
-    expect(hasShellAccess(built)).toBe(true);
+    expect(allow?.match).toContain("bun test *");
+    expect(allow?.match).toContain("git add *");
+    expect(allow?.match).toContain("git status *");
+    // On v3 the rules do the scoping, so the tool still is not trusted outright.
+    expect(hasUnscopedShell(built)).toBe(false);
   });
 
-  test("does not grant shell when no commands were allowed", () => {
-    const built = config({ engine: "v3" });
-    const rules = built.permissions?.rules ?? [];
+  test("allows the read-only git set even with nothing configured", () => {
+    const rules = config({ engine: "v3" }).permissions?.rules ?? [];
+    const allow = rules.find(
+      (rule) => rule.capability === "shell" && rule.effect === "allow",
+    );
 
-    expect(hasShellAccess(built)).toBe(false);
-    expect(
-      rules.some(
-        (rule) => rule.capability === "shell" && rule.effect === "allow",
-      ),
-    ).toBe(false);
+    expect(allow?.match).toContain("git status");
+    expect(allow?.match).toContain("git status *");
+    expect(allow?.match).toContain("git diff *");
   });
 
   test("always denies the dangerous commands, since deny outranks allow", () => {
@@ -146,43 +191,7 @@ describe("buildAgentConfig on the v3 engine", () => {
     expect(deny?.match).toContain("curl *");
     expect(deny?.match).toContain("sudo *");
     expect(deny?.match).toContain("rm -rf *");
-  });
-});
-
-describe("willGrantShell", () => {
-  test("is false by default", () => {
-    expect(
-      willGrantShell({ engine: "v2", extraTools: "", extraShellCommands: "" }),
-    ).toBe(false);
-  });
-
-  test("is true when shell is named in allowed_tools, on either engine", () => {
-    for (const engine of ["v2", "v3"] as const) {
-      expect(
-        willGrantShell({
-          engine,
-          extraTools: "shell",
-          extraShellCommands: "",
-        }),
-      ).toBe(true);
-    }
-  });
-
-  test("is true on v3 with allowed shell commands, false on v2", () => {
-    expect(
-      willGrantShell({
-        engine: "v3",
-        extraTools: "",
-        extraShellCommands: "bun test *",
-      }),
-    ).toBe(true);
-    expect(
-      willGrantShell({
-        engine: "v2",
-        extraTools: "",
-        extraShellCommands: "bun test *",
-      }),
-    ).toBe(false);
+    expect(deny?.match).toContain("git push *");
   });
 });
 
