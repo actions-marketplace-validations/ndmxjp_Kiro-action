@@ -26,6 +26,16 @@ on:
         default: "low"
         type: choice
         options: [low, medium, high]
+      agent_engine:
+        description: "Agent engine to run"
+        required: false
+        default: "v2"
+        type: choice
+        options: [v2, v3]
+      allowed_shell_commands:
+        description: "Shell patterns to allow (v3 only)"
+        required: false
+        default: ""
 
 jobs:
   smoke:
@@ -43,6 +53,8 @@ jobs:
           kiro_api_key: ${{ secrets.KIRO_API_KEY }}
           prompt: ${{ inputs.prompt }}
           effort: ${{ inputs.effort }}
+          agent_engine: ${{ inputs.agent_engine }}
+          allowed_shell_commands: ${{ inputs.allowed_shell_commands }}
           timeout_minutes: 10
 
       - name: Report the outcome
