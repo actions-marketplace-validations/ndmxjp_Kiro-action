@@ -14,6 +14,25 @@ const MAX_INLINE_PROMPT_BYTES = 96 * 1024;
 /** Cap on how much CLI output is retained for the execution log. */
 const MAX_CAPTURED_BYTES = 8 * 1024 * 1024;
 
+/**
+ * CSI and OSC escape sequences, plus the single-character escapes the CLI's
+ * progress rendering emits (cursor hide/show, colour resets).
+ */
+const ANSI_PATTERN =
+  /[\u001B\u009B][[\]()#;?]*(?:(?:(?:(?:;[-a-zA-Z\d\/#&.:=?%@~_]+)*|[a-zA-Z\d]+(?:;[-a-zA-Z\d\/#&.:=?%@~_]*)*)?\u0007)|(?:(?:\d{1,4}(?:;\d{0,4})*)?[\dA-PR-TZcf-ntqry=><~]))/g;
+
+/**
+ * Removes terminal control sequences from captured output.
+ *
+ * `NO_COLOR`, `KIRO_LOG_NO_COLOR`, and `TERM=dumb` are all set for the child
+ * process, and the CLI still emits colour and cursor-control sequences (verified
+ * on a real run: 59 escape bytes in a 958-byte log). They make the execution
+ * file and the job summary hard to read, so strip them at capture time.
+ */
+export function stripAnsi(value: string): string {
+  return value.replace(ANSI_PATTERN, "");
+}
+
 export type KiroExitReason = "success" | "failure" | "mcp_startup_failure";
 
 export type KiroRunResult = {
@@ -142,7 +161,9 @@ export async function runKiro(params: RunKiroParams): Promise<KiroRunResult> {
   await mkdir(dirname(outputFile), { recursive: true });
   // The log is written to disk and surfaced in the step summary, neither of
   // which is covered by GitHub's log masking, so redact before persisting.
-  await writeFile(outputFile, redactAllSecrets(output), "utf8");
+  // Escape sequences are stripped as well: they survive NO_COLOR and make both
+  // the file and the summary unreadable.
+  await writeFile(outputFile, redactAllSecrets(stripAnsi(output)), "utf8");
 
   return {
     exitCode,

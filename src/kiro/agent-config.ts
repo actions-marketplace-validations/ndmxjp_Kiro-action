@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from "fs/promises";
 import { homedir } from "os";
-import { join } from "path";
+import { join, resolve } from "path";
 import { KIRO_AGENT_NAME } from "../github/constants";
 import type { McpServers } from "../mcp/prepare-mcp-config";
 import type { AutoDetectedMode } from "../modes/detector";
@@ -8,8 +8,18 @@ import type { AutoDetectedMode } from "../modes/detector";
 /**
  * The hardened push wrapper the agent is allowed to run instead of `git push`.
  * See scripts/git-push.sh for why a bare `git push` allowance is unsafe.
+ *
+ * Normalized, because this exact string goes into a permission `match` pattern
+ * and also into the prompt: the agent's command has to match it literally.
+ * `GITHUB_ACTION_PATH` ends in `/.` when the action is used as `uses: ./`, which
+ * would otherwise produce `<workspace>/.//scripts/git-push.sh` — a path the
+ * shell resolves fine but which no longer matches what the model is likely to
+ * type.
  */
-export const GIT_PUSH_WRAPPER = `${process.env.GITHUB_ACTION_PATH}/scripts/git-push.sh`;
+export const GIT_PUSH_WRAPPER = resolve(
+  process.env.GITHUB_ACTION_PATH || ".",
+  "scripts/git-push.sh",
+);
 
 /** Read-only built-ins, safe to grant in every mode. */
 const READ_TOOLS = ["read", "glob", "grep", "todo", "thinking", "report"];
