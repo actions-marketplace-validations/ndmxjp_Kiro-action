@@ -1,0 +1,110 @@
+# Diagnostic workflow: find out what the Kiro CLI actually permits in
+# --no-interactive mode. Run by hand; not part of the action.
+#
+# The first smoke run showed `git status --short` being rejected with
+#   "Command execute_bash is rejected because it matches one or more rules on
+#    the denied list: - non-interactive mode (no user to approve)"
+# even though the documented default policy allows read-only git commands. That
+# leaves two possibilities: agent-scoped allow rules are ignored in headless
+# mode, or `allowedTools` (a CLI 2.x field) no longer pre-approves anything.
+#
+# This probe runs the CLI directly — bypassing the action — across four
+# configurations, and asks for the same three operations each time:
+#   shell (git status), write (create a file), and shell (curl, expected denied).
+name: Kiro permission probe
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      KIRO_API_KEY: ${{ secrets.KIRO_API_KEY }}
+      KIRO_LOG_NO_COLOR: "1"
+      NO_COLOR: "1"
+      TERM: dumb
+      TASK: |
+        Attempt all three of these, then report for each whether it ran or was refused, quoting any refusal:
+        1. Run the shell command: git status --short
+        2. Create a file named probe-write.txt containing the text ok
+        3. Run the shell command: curl -s https://example.com
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the Kiro CLI
+        run: |
+          set -o pipefail
+          curl -fsSL https://cli.kiro.dev/install | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Record the CLI version
+        run: kiro-cli --version || true
+
+      - name: Write the probe agent configs
+        run: |
+          mkdir -p ~/.kiro/agents ~/.kiro/settings
+
+          # A: what this action generates today — tools + allowedTools + agent
+          #    permissions.rules, with the documented shell glob syntax.
+          cat > ~/.kiro/agents/probe-agent.json <<'JSON'
+          {
+            "name": "probe-agent",
+            "description": "Permission probe",
+            "prompt": "You are running in CI. Attempt what you are asked and report the outcome verbatim.",
+            "mcpServers": {},
+            "tools": ["read", "glob", "grep", "write", "code", "shell"],
+            "allowedTools": ["read", "glob", "grep", "write", "code"],
+            "permissions": {
+              "rules": [
+                { "capability": "shell", "match": ["git *"], "effect": "allow" },
+                { "capability": "fs_write", "match": ["**"], "effect": "allow" }
+              ]
+            },
+            "includeMcpJson": false
+          }
+          JSON
+
+          # The user-scoped file the 3.0 migration guide names as the CI
+          # mechanism. Written but NOT active yet — moved into place for case D.
+          cat > /tmp/permissions.yaml <<'YAML'
+          rules:
+            - capability: shell
+              match: ["git *"]
+              effect: allow
+            - capability: fs_write
+              effect: allow
+            - capability: fs_read
+              effect: allow
+          YAML
+
+          kiro-cli agent validate ~/.kiro/agents/probe-agent.json || true
+
+      - name: "Case A — default agent, no flags"
+        run: kiro-cli chat --no-interactive "$TASK" || echo "EXIT=$?"
+
+      - name: "Case B — default agent, --trust-all-tools"
+        run: kiro-cli chat --no-interactive --trust-all-tools "$TASK" || echo "EXIT=$?"
+
+      - name: "Case C — probe agent with agent-scoped permissions.rules"
+        run: kiro-cli chat --no-interactive --agent probe-agent "$TASK" || echo "EXIT=$?"
+
+      - name: "Case D — probe agent plus user-scoped permissions.yaml"
+        run: |
+          cp /tmp/permissions.yaml ~/.kiro/settings/permissions.yaml
+          cat ~/.kiro/settings/permissions.yaml
+          kiro-cli chat --no-interactive --agent probe-agent "$TASK" || echo "EXIT=$?"
+
+      - name: "Case E — user-scoped permissions.yaml with the default agent"
+        run: kiro-cli chat --no-interactive "$TASK" || echo "EXIT=$?"
+
+      - name: What actually landed on disk
+        if: always()
+        run: |
+          echo "probe-write.txt:"
+          cat probe-write.txt 2>/dev/null || echo "  (not created)"
+          echo "git status:"
+          git status --short || true
