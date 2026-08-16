@@ -19,6 +19,7 @@ import {
   willGrantShell,
   writeAgentConfig,
 } from "../../kiro/agent-config";
+import { writeUserMcpJson } from "../../kiro/mcp-json";
 
 export type PreparedRun = {
   commentId?: number;
@@ -104,14 +105,17 @@ export async function prepareTagMode({
     context,
   });
 
-  // The v3 engine ignores agent-declared MCP servers (measured), which in tag
-  // mode means the tracking comment would never be updated: the run would look
-  // silent to whoever asked for it.
+  // The v3 engine ignores MCP servers declared inside an agent profile, so they
+  // have to go through the user-scoped mcp.json instead, which it does read.
   if (context.inputs.agentEngine === "v3") {
     core.warning(
-      "agent_engine: v3 does not load this action's MCP servers, so Kiro cannot " +
-        "update the tracking comment. Tag mode is only fully supported on v2.",
+      "agent_engine: v3 is early access. Its MCP support goes through " +
+        "~/.kiro/settings/mcp.json rather than the agent profile, and it also " +
+        "merges the checkout's .kiro/settings/mcp.json.",
     );
+    if (Object.keys(mcpServers).length > 0) {
+      await writeUserMcpJson(mcpServers);
+    }
   }
 
   const hasShell = willGrantShell({

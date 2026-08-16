@@ -43,8 +43,15 @@ describe("buildAgentConfig on the v2 engine", () => {
     expect(hasShellAccess(built)).toBe(false);
   });
 
-  test("emits no capability rules, which v2 would ignore anyway", () => {
+  test("emits no capability rules — v2 drops a config that carries them", () => {
+    // Measured: passing a config with a `permissions` block to the v2 engine
+    // produced "no agent with name ... found. Falling back to user specified
+    // default", so the two schemas must never be mixed.
     expect(config().permissions).toBeUndefined();
+  });
+
+  test("does not merge mcp.json, which the checkout can control", () => {
+    expect(config().includeMcpJson).toBe(false);
   });
 
   test("ignores allowed_shell_commands, because v2 cannot scope shell", () => {
@@ -69,6 +76,28 @@ describe("buildAgentConfig on the v2 engine", () => {
 });
 
 describe("buildAgentConfig on the v3 engine", () => {
+  test("merges mcp.json, since v3 ignores servers in the agent profile", () => {
+    expect(config({ engine: "v3" }).includeMcpJson).toBe(true);
+  });
+
+  test("allows this action's own MCP servers", () => {
+    const rules = config({ engine: "v3" }).permissions?.rules ?? [];
+    const mcp = rules.find((rule) => rule.capability === "mcp");
+
+    expect(mcp).toEqual({
+      capability: "mcp",
+      match: ["github_comment/*"],
+      effect: "allow",
+    });
+  });
+
+  test("adds no mcp rule when there are no servers", () => {
+    const rules =
+      config({ engine: "v3", mcpServers: {} }).permissions?.rules ?? [];
+
+    expect(rules.some((rule) => rule.capability === "mcp")).toBe(false);
+  });
+
   test("confines writes to the checkout", () => {
     const rules = config({ engine: "v3" }).permissions?.rules ?? [];
     const write = rules.find((rule) => rule.capability === "fs_write");

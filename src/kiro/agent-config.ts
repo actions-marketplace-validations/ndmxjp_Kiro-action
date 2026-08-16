@@ -70,11 +70,19 @@ export type KiroAgentConfig = {
    */
   allowedTools: string[];
   /**
-   * Never merge `.kiro/settings/mcp.json` from the checkout: on a pull request
-   * that file is attacker-controlled and would let a PR add MCP servers, i.e.
-   * arbitrary commands.
+   * Whether to merge the MCP servers declared in `~/.kiro/settings/mcp.json` and
+   * `.kiro/settings/mcp.json`.
+   *
+   * False on v2, where the servers in `mcpServers` above are honoured directly
+   * and merging would also pull in the checkout's copy — attacker-controlled on
+   * a pull request, and a way to have arbitrary commands started.
+   *
+   * True on v3, which ignores `mcpServers` in an agent profile entirely: there
+   * the servers are written to the user-scoped mcp.json instead (see
+   * src/kiro/mcp-json.ts). The checkout's copy is merged too, which is why
+   * restore-config replaces `.kiro/` from the base branch on pull requests.
    */
-  includeMcpJson: false;
+  includeMcpJson: boolean;
   /**
    * Capability rules, honoured only by the v3 agent engine. On v2 they are
    * ignored, which is why `allowedTools` above carries the real policy there.
@@ -141,9 +149,13 @@ export function buildAgentConfig({
     // would only mislead the model into trying it.
     tools: dedupe(granted),
     allowedTools: dedupe(granted),
-    includeMcpJson: false,
+    includeMcpJson: engine === "v3",
     ...(engine === "v3"
-      ? { permissions: { rules: buildV3Rules(shellPatterns) } }
+      ? {
+          permissions: {
+            rules: buildV3Rules(shellPatterns, Object.keys(mcpServers)),
+          },
+        }
       : {}),
     ...(model ? { model } : {}),
   };
@@ -157,13 +169,26 @@ export function buildAgentConfig({
  * default), and a `shell` deny rule blocked `curl`, naming the agent profile as
  * its source.
  */
-function buildV3Rules(shellPatterns: string[]): PermissionRule[] {
+function buildV3Rules(
+  shellPatterns: string[],
+  mcpServerNames: string[],
+): PermissionRule[] {
   const rules: PermissionRule[] = [
     { capability: "fs_read", effect: "allow" },
     // Confine writes to the checkout. Without this the agent could write to
     // $HOME, which is how it would reach its own permission files.
     { capability: "fs_write", match: ["./**"], effect: "allow" },
   ];
+
+  // Only this action's own servers. Without the rule the tool call falls through
+  // to an approval prompt, which is a denial in headless mode.
+  if (mcpServerNames.length > 0) {
+    rules.push({
+      capability: "mcp",
+      match: mcpServerNames.map((name) => `${name}/*`),
+      effect: "allow",
+    });
+  }
 
   if (shellPatterns.length > 0) {
     rules.push({ capability: "shell", match: shellPatterns, effect: "allow" });

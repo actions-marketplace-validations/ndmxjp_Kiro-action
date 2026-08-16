@@ -113,12 +113,22 @@ those, a `deny` rule blocked `curl` while naming the agent profile as its source
 and `fs_write` scoped to `./**` blocked a write to `/tmp`. That is the policy
 this action would prefer.
 
-It is not the default because tag mode reports through an MCP tool. On v3 the
-model sees no MCP tools at all — in a probe it could see only
-`disclose_context` — so the tracking comment would never be updated and the run
-would look silent to whoever asked for it. v3 is therefore offered for agent-mode
-automation, where there is no tracking comment to lose, and `allowed_shell_commands`
-only takes effect there.
+MCP needs different wiring there. With the server declared inside the agent
+profile, the model could not see the tool at all; with the identical server in
+`~/.kiro/settings/mcp.json` and `includeMcpJson: true`, it saw
+`mcp_probe_echo_probe` and the call returned. So when `agent_engine: v3` is set,
+this action writes its servers to that user-scoped file instead. The nearest
+upstream reports are kirodotdev/Kiro#7349 (inline servers ignored over ACP,
+closed) and #7425 (servers not loaded in 2.0.0's default mode, open); the v3 case
+does not appear to be reported yet.
+
+v3 is not the default anyway, for three reasons: the docs label CLI 3.0 early
+access, `includeMcpJson: true` also merges the checkout's
+`.kiro/settings/mcp.json` (which is why the config restore matters), and the
+engine's registry is fragile in ways others have hit — kirodotdev/Kiro#10733
+reports it silently dropping any agent config without a `permissions` block while
+`agent validate` still exits 0. Use it for agent-mode automation that needs to
+run commands.
 
 ## Credentials
 

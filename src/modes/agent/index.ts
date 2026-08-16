@@ -9,6 +9,7 @@ import {
   willGrantShell,
   writeAgentConfig,
 } from "../../kiro/agent-config";
+import { writeUserMcpJson } from "../../kiro/mcp-json";
 import type { PreparedRun } from "../tag";
 
 /**
@@ -52,6 +53,13 @@ export async function prepareAgentMode({
     mode: "agent",
     context,
   });
+
+  if (
+    context.inputs.agentEngine === "v3" &&
+    Object.keys(mcpServers).length > 0
+  ) {
+    await writeUserMcpJson(mcpServers);
+  }
 
   const hasShell = willGrantShell({
     engine: context.inputs.agentEngine,
