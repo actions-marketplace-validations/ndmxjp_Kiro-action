@@ -1,16 +1,19 @@
 # Diagnostic workflow: find out what the Kiro CLI actually permits in
 # --no-interactive mode. Run by hand; not part of the action.
 #
-# The first smoke run showed `git status --short` being rejected with
-#   "Command execute_bash is rejected because it matches one or more rules on
-#    the denied list: - non-interactive mode (no user to approve)"
-# even though the documented default policy allows read-only git commands. That
-# leaves two possibilities: agent-scoped allow rules are ignored in headless
-# mode, or `allowedTools` (a CLI 2.x field) no longer pre-approves anything.
+# Round 1 established, on kiro-cli 2.18.1 (what the install script ships):
+#   - default agent, no flags .................. everything denied
+#   - --trust-all-tools ........................ everything allowed, incl. curl
+#   - agent-scoped permissions.rules ........... ignored (CLI 3.0 feature)
+#   - user-scoped permissions.yaml ............. ignored (CLI 3.0 feature)
+# Denials all read "non-interactive mode (no user to approve)", i.e. anything
+# not pre-trusted is refused because there is nobody to prompt.
 #
-# This probe runs the CLI directly — bypassing the action — across four
-# configurations, and asks for the same three operations each time:
-#   shell (git status), write (create a file), and shell (curl, expected denied).
+# Round 2 (this file) tests the mechanisms that 2.x actually documents:
+# `--trust-tools` for per-tool trust, and `toolsSettings.execute_bash`
+# (allowedCommands / deniedCommands) for per-command scoping. The question that
+# decides this action's security model is whether shell can be limited to git
+# while file writes still work.
 name: Kiro permission probe
 
 on:
@@ -27,11 +30,12 @@ jobs:
       KIRO_LOG_NO_COLOR: "1"
       NO_COLOR: "1"
       TERM: dumb
-      TASK: |
-        Attempt all three of these, then report for each whether it ran or was refused, quoting any refusal:
+      WRITE_ONLY: |
+        Create a file named probe-write.txt containing the text ok. Do not run any shell command. Report whether it worked, quoting any refusal.
+      SHELL_SCOPED: |
+        Attempt both of these in order, then report each outcome, quoting any refusal verbatim:
         1. Run the shell command: git status --short
-        2. Create a file named probe-write.txt containing the text ok
-        3. Run the shell command: curl -s https://example.com
+        2. Run the shell command: curl -s https://example.com
     steps:
       - uses: actions/checkout@v4
 
@@ -42,69 +46,62 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Record the CLI version
-        run: kiro-cli --version || true
+        run: kiro-cli --version
 
       - name: Write the probe agent configs
         run: |
-          mkdir -p ~/.kiro/agents ~/.kiro/settings
+          mkdir -p ~/.kiro/agents
 
-          # A: what this action generates today — tools + allowedTools + agent
-          #    permissions.rules, with the documented shell glob syntax.
-          cat > ~/.kiro/agents/probe-agent.json <<'JSON'
+          # 2.x-style config: allowedTools for pre-approval, toolsSettings for
+          # per-command scoping of the shell tool.
+          cat > ~/.kiro/agents/probe-2x.json <<'JSON'
           {
-            "name": "probe-agent",
-            "description": "Permission probe",
+            "name": "probe-2x",
+            "description": "Permission probe, CLI 2.x schema",
             "prompt": "You are running in CI. Attempt what you are asked and report the outcome verbatim.",
             "mcpServers": {},
-            "tools": ["read", "glob", "grep", "write", "code", "shell"],
-            "allowedTools": ["read", "glob", "grep", "write", "code"],
-            "permissions": {
-              "rules": [
-                { "capability": "shell", "match": ["git *"], "effect": "allow" },
-                { "capability": "fs_write", "match": ["**"], "effect": "allow" }
-              ]
-            },
-            "includeMcpJson": false
+            "tools": ["fs_read", "fs_write", "execute_bash", "grep", "glob"],
+            "allowedTools": ["fs_read", "fs_write", "grep", "glob"],
+            "toolsSettings": {
+              "execute_bash": {
+                "allowedCommands": ["^git status.*$", "^git add .*$", "^git commit .*$"],
+                "deniedCommands": ["^curl", "^wget", "^sudo", "^rm "],
+                "denyByDefault": true
+              },
+              "fs_write": {
+                "allowedPaths": ["./**"]
+              }
+            }
           }
           JSON
 
-          # The user-scoped file the 3.0 migration guide names as the CI
-          # mechanism. Written but NOT active yet — moved into place for case D.
-          cat > /tmp/permissions.yaml <<'YAML'
-          rules:
-            - capability: shell
-              match: ["git *"]
-              effect: allow
-            - capability: fs_write
-              effect: allow
-            - capability: fs_read
-              effect: allow
-          YAML
+          kiro-cli agent validate ~/.kiro/agents/probe-2x.json || true
+          echo "--- config as written:"
+          cat ~/.kiro/agents/probe-2x.json
 
-          kiro-cli agent validate ~/.kiro/agents/probe-agent.json || true
-
-      - name: "Case A — default agent, no flags"
-        run: kiro-cli chat --no-interactive "$TASK" || echo "EXIT=$?"
-
-      - name: "Case B — default agent, --trust-all-tools"
-        run: kiro-cli chat --no-interactive --trust-all-tools "$TASK" || echo "EXIT=$?"
-
-      - name: "Case C — probe agent with agent-scoped permissions.rules"
-        run: kiro-cli chat --no-interactive --agent probe-agent "$TASK" || echo "EXIT=$?"
-
-      - name: "Case D — probe agent plus user-scoped permissions.yaml"
+      - name: "Case F — --trust-tools with write but not shell (write-only task)"
         run: |
-          cp /tmp/permissions.yaml ~/.kiro/settings/permissions.yaml
-          cat ~/.kiro/settings/permissions.yaml
-          kiro-cli chat --no-interactive --agent probe-agent "$TASK" || echo "EXIT=$?"
+          rm -f probe-write.txt
+          kiro-cli chat --no-interactive --trust-tools=fs_read,fs_write "$WRITE_ONLY" || echo "EXIT=$?"
+          echo "file exists: $([ -f probe-write.txt ] && echo yes || echo no)"
 
-      - name: "Case E — user-scoped permissions.yaml with the default agent"
-        run: kiro-cli chat --no-interactive "$TASK" || echo "EXIT=$?"
-
-      - name: What actually landed on disk
-        if: always()
+      - name: "Case G — 2.x agent allowedTools only, no flags (write-only task)"
         run: |
-          echo "probe-write.txt:"
-          cat probe-write.txt 2>/dev/null || echo "  (not created)"
-          echo "git status:"
-          git status --short || true
+          rm -f probe-write.txt
+          kiro-cli chat --no-interactive --agent probe-2x "$WRITE_ONLY" || echo "EXIT=$?"
+          echo "file exists: $([ -f probe-write.txt ] && echo yes || echo no)"
+
+      - name: "Case H — 2.x agent, --trust-tools includes shell, allowedCommands scoped to git"
+        run: |
+          kiro-cli chat --no-interactive --agent probe-2x \
+            --trust-tools=fs_read,fs_write,execute_bash "$SHELL_SCOPED" || echo "EXIT=$?"
+
+      - name: "Case I — same agent with --trust-all-tools (does it bypass allowedCommands?)"
+        run: |
+          kiro-cli chat --no-interactive --agent probe-2x --trust-all-tools "$SHELL_SCOPED" || echo "EXIT=$?"
+
+      - name: "Case J — --trust-tools with the alias names (write/shell) rather than tool names"
+        run: |
+          rm -f probe-write.txt
+          kiro-cli chat --no-interactive --trust-tools=read,write "$WRITE_ONLY" || echo "EXIT=$?"
+          echo "file exists: $([ -f probe-write.txt ] && echo yes || echo no)"
