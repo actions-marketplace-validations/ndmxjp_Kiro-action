@@ -49,6 +49,15 @@ export type RunKiroParams = {
   agentName: string;
   /** "v3" adds --v3, selecting the KAS agent engine. */
   engine: "v2" | "v3";
+  /**
+   * Treat this many seconds of silence as the run having finished.
+   *
+   * The v3 engine does not exit in `--no-interactive` mode: on a measured run it
+   * printed its complete answer and then sat there until the job timed out. Since
+   * the work is done at that point, going quiet is the only available completion
+   * signal.
+   */
+  idleTimeoutSeconds?: number;
   prompt: string;
   promptFile: string;
   outputFile: string;
@@ -64,6 +73,7 @@ export async function runKiro(params: RunKiroParams): Promise<KiroRunResult> {
     kiroCommand,
     agentName,
     engine,
+    idleTimeoutSeconds,
     prompt,
     promptFile,
     outputFile,
@@ -99,14 +109,19 @@ export async function runKiro(params: RunKiroParams): Promise<KiroRunResult> {
 
   // No shell: the prompt and every argument are passed straight to the binary,
   // so nothing in them can be reinterpreted as a shell command.
+  // detached puts the CLI in its own process group. On v3 it starts a KAS server
+  // as a grandchild, and signalling only the CLI leaves that server alive holding
+  // the pipes — which is why terminating the group is the only thing that works.
   const child = spawn(kiroCommand, args, {
     stdio: ["ignore", "pipe", "pipe"],
     env: process.env,
+    detached: true,
   });
 
   const captured: Buffer[] = [];
   let capturedBytes = 0;
   let truncated = false;
+  let lastOutputAt = Date.now();
 
   const capture = (chunk: Buffer) => {
     if (capturedBytes < MAX_CAPTURED_BYTES) {
@@ -118,39 +133,81 @@ export async function runKiro(params: RunKiroParams): Promise<KiroRunResult> {
   };
 
   child.stdout.on("data", (chunk: Buffer) => {
+    lastOutputAt = Date.now();
     capture(chunk);
     process.stdout.write(chunk);
   });
   child.stderr.on("data", (chunk: Buffer) => {
+    lastOutputAt = Date.now();
     capture(chunk);
     process.stderr.write(chunk);
   });
 
   let timedOut = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let killTimer: ReturnType<typeof setTimeout> | undefined;
+  let finishedByIdle = false;
+  const timeouts: Array<ReturnType<typeof setTimeout>> = [];
+  let idlePoll: ReturnType<typeof setInterval> | undefined;
+
+  /** Signals the whole process group, so a grandchild cannot outlive the CLI. */
+  const terminate = () => {
+    const signalGroup = (signal: NodeJS.Signals) => {
+      try {
+        process.kill(-child.pid!, signal);
+      } catch {
+        // Already gone, or the group no longer exists.
+      }
+    };
+    signalGroup("SIGTERM");
+    timeouts.push(setTimeout(() => signalGroup("SIGKILL"), 10_000));
+  };
 
   if (timeoutMinutes && timeoutMinutes > 0) {
-    timer = setTimeout(() => {
-      timedOut = true;
-      core.warning(
-        `Kiro CLI exceeded the ${timeoutMinutes} minute timeout; terminating it`,
-      );
-      child.kill("SIGTERM");
-      killTimer = setTimeout(() => child.kill("SIGKILL"), 10_000);
-    }, timeoutMinutes * 60_000);
+    timeouts.push(
+      setTimeout(() => {
+        timedOut = true;
+        core.warning(
+          `Kiro CLI exceeded the ${timeoutMinutes} minute timeout; terminating it`,
+        );
+        terminate();
+      }, timeoutMinutes * 60_000),
+    );
   }
 
+  if (idleTimeoutSeconds && idleTimeoutSeconds > 0) {
+    const idleMs = idleTimeoutSeconds * 1000;
+    idlePoll = setInterval(() => {
+      if (Date.now() - lastOutputAt < idleMs) {
+        return;
+      }
+      finishedByIdle = true;
+      core.info(
+        `Kiro CLI produced no output for ${idleTimeoutSeconds}s; treating the run as finished and shutting it down.`,
+      );
+      terminate();
+    }, 1_000);
+  }
+
+  // Resolve on "exit" rather than "close": "close" additionally waits for the
+  // stdio streams to end, and a surviving grandchild keeps them open forever.
   const exitCode = await new Promise<number>((resolve, reject) => {
     child.on("error", reject);
-    child.on("close", (code, signal) => {
-      // A signal death reports code === null; surface it as a failure.
+    child.on("exit", (code, signal) => {
+      // A signal death reports code === null; surface it as a failure unless the
+      // signal was ours after the run had already finished.
       resolve(code ?? (signal ? 1 : 0));
     });
   }).finally(() => {
-    if (timer) clearTimeout(timer);
-    if (killTimer) clearTimeout(killTimer);
+    for (const timeout of timeouts) {
+      clearTimeout(timeout);
+    }
+    if (idlePoll) {
+      clearInterval(idlePoll);
+    }
   });
+
+  // Give output still in flight a moment to arrive: "exit" can fire before the
+  // pipes have been drained.
+  await new Promise((resolve) => setTimeout(resolve, 250));
 
   const durationMs = Date.now() - startedAt;
 
@@ -160,6 +217,9 @@ export async function runKiro(params: RunKiroParams): Promise<KiroRunResult> {
   }
   if (timedOut) {
     output += `\n[kiro-action: terminated after the ${timeoutMinutes} minute timeout]\n`;
+  }
+  if (finishedByIdle) {
+    output += `\n[kiro-action: no output for ${idleTimeoutSeconds}s, so the CLI was shut down; the v3 engine does not exit on its own in headless mode]\n`;
   }
 
   await mkdir(dirname(outputFile), { recursive: true });
@@ -171,7 +231,9 @@ export async function runKiro(params: RunKiroParams): Promise<KiroRunResult> {
 
   return {
     exitCode,
-    reason: exitReason(exitCode),
+    // A run shut down after it went quiet had already produced its answer, so the
+    // signal we sent must not be reported as the CLI failing.
+    reason: finishedByIdle && !timedOut ? "success" : exitReason(exitCode),
     outputFile,
     durationMs,
     timedOut,

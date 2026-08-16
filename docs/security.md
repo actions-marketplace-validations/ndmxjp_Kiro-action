@@ -122,7 +122,13 @@ upstream reports are kirodotdev/Kiro#7349 (inline servers ignored over ACP,
 closed) and #7425 (servers not loaded in 2.0.0's default mode, open); the v3 case
 does not appear to be reported yet.
 
-v3 is not the default anyway, for three reasons: the docs label CLI 3.0 early
+v3 also does not exit. On a measured run it printed its complete answer and then
+sat there until the job timed out, so when `agent_engine: v3` is set the action
+treats 90 seconds of silence as completion and shuts the CLI down — terminating
+the whole process group, because the KAS server runs as a grandchild and keeps the
+output pipes open after the CLI itself is signalled.
+
+v3 is not the default anyway, for these reasons: the docs label CLI 3.0 early
 access, `includeMcpJson: true` also merges the checkout's
 `.kiro/settings/mcp.json` (which is why the config restore matters), and the
 engine's registry is fragile in ways others have hit — kirodotdev/Kiro#10733

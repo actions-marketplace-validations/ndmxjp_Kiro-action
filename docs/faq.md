@@ -79,5 +79,10 @@ comment tool. The captured output (`execution_file`) has the server's stderr.
 
 ## It ran for too long
 
-Set `timeout_minutes`. The action terminates the CLI and still updates the
-tracking comment with the failure.
+Set `timeout_minutes`. The action terminates the CLI — the whole process group, so
+a surviving child cannot keep the job alive — and still updates the tracking
+comment with the failure.
+
+On `agent_engine: v3` the CLI does not exit even after it has answered, so the
+action shuts it down after 90 seconds of silence and treats that as a normal
+finish. The execution log says so when it happens.

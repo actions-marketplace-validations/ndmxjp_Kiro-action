@@ -147,6 +147,8 @@ export async function run() {
       trustAllTools: context.inputs.trustAllTools,
       extraArgs: parseKiroArgs(process.env.KIRO_ARGS),
       timeoutMinutes: parseTimeout(process.env.TIMEOUT_MINUTES),
+      // Only v3 needs this: it finishes its answer and then never exits.
+      idleTimeoutSeconds: context.inputs.agentEngine === "v3" ? 90 : undefined,
     });
 
     core.setOutput("execution_file", kiroResult.outputFile);
