@@ -131,3 +131,54 @@ jobs:
           kiro-cli agent validate ~/.kiro/agents/probe-scoped.json || true
           kiro-cli chat --no-interactive --agent probe-scoped "Attempt all three in order and report each outcome, quoting any refusal verbatim: 1. Run the shell command: git status --short  2. Run the shell command: curl -s https://example.com  3. Create a file named probe-write.txt containing the text ok" || echo "EXIT=$?"
           echo "file exists: $([ -f probe-write.txt ] && echo yes || echo no)"
+
+      - name: "Does this build expose a V3 mode?"
+        run: |
+          kiro-cli --help-all 2>&1 | grep -iE "v3|version" || true
+          echo "--- chat help:"
+          kiro-cli chat --help 2>&1 | grep -iE "v3" || echo "  (no --v3 flag in chat help)"
+
+      - name: "Case L — V3 mode with agent-scoped permissions.rules"
+        run: |
+          mkdir -p ~/.kiro/agents
+          cat > ~/.kiro/agents/probe-3x.json <<'JSON'
+          {
+            "name": "probe-3x",
+            "description": "Permission probe, CLI 3.x schema",
+            "prompt": "You are running in CI. Attempt what you are asked and report each outcome verbatim.",
+            "mcpServers": {},
+            "tools": ["fs_read", "fs_write", "execute_bash", "grep", "glob"],
+            "permissions": {
+              "rules": [
+                { "capability": "shell", "match": ["git *"], "effect": "allow" },
+                { "capability": "shell", "match": ["curl *", "wget *"], "effect": "deny" },
+                { "capability": "fs_write", "match": ["./**"], "effect": "allow" },
+                { "capability": "fs_read", "effect": "allow" }
+              ]
+            },
+            "includeMcpJson": false
+          }
+          JSON
+          rm -f probe-write.txt ~/.kiro/settings/permissions.yaml
+          kiro-cli chat --v3 --no-interactive --agent probe-3x "Attempt all three in order and report each outcome, quoting any refusal verbatim: 1. Run the shell command: git status --short  2. Run the shell command: curl -s https://example.com  3. Create a file named probe-write.txt containing the text ok" || echo "EXIT=$?"
+          echo "file exists: $([ -f probe-write.txt ] && echo yes || echo no)"
+
+      - name: "Case M — V3 mode with user-scoped permissions.yaml"
+        run: |
+          mkdir -p ~/.kiro/settings
+          cat > ~/.kiro/settings/permissions.yaml <<'YAML'
+          rules:
+            - capability: shell
+              match: ["git *"]
+              effect: allow
+            - capability: shell
+              match: ["curl *"]
+              effect: deny
+            - capability: fs_write
+              effect: allow
+            - capability: fs_read
+              effect: allow
+          YAML
+          rm -f probe-write.txt
+          kiro-cli chat --v3 --no-interactive "Attempt all three in order and report each outcome, quoting any refusal verbatim: 1. Run the shell command: git status --short  2. Run the shell command: curl -s https://example.com  3. Create a file named probe-write.txt containing the text ok" || echo "EXIT=$?"
+          echo "file exists: $([ -f probe-write.txt ] && echo yes || echo no)"
