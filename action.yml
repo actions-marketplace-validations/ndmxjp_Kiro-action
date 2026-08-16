@@ -1,0 +1,245 @@
+name: "Kiro Action"
+description: "Run the Kiro CLI on GitHub issues and pull requests. Unofficial community action; not affiliated with AWS."
+branding:
+  icon: "cpu"
+  color: "orange"
+
+inputs:
+  # ---- Credentials --------------------------------------------------------
+  kiro_api_key:
+    description: "Kiro API key. Required. Pass it from a secret, e.g. ${{ secrets.KIRO_API_KEY }}."
+    required: true
+  github_token:
+    description: "GitHub token to act with. Defaults to the workflow's github.token. Provide a PAT or an app token to have commits and comments attributed to another identity."
+    required: false
+  github_app_id:
+    description: "GitHub App id. When set together with github_app_private_key, the action mints a short-lived installation token and revokes it when the job ends."
+    required: false
+  github_app_private_key:
+    description: "PEM private key for the GitHub App named by github_app_id."
+    required: false
+  additional_permissions:
+    description: "Extra permissions to request for the GitHub App token, as newline-separated 'key: value' pairs (e.g. 'actions: read')."
+    required: false
+    default: ""
+
+  # ---- What to run --------------------------------------------------------
+  prompt:
+    description: "Instructions for Kiro. Providing this selects agent mode (no tracking comment) unless track_progress is also set."
+    required: false
+    default: ""
+  custom_instructions:
+    description: "Extra standing instructions appended to the tag-mode prompt."
+    required: false
+    default: ""
+  trigger_phrase:
+    description: "Phrase that triggers a tag-mode run when it appears in an issue, pull request, comment, or review."
+    required: false
+    default: "@kiro"
+  assignee_trigger:
+    description: "Username whose assignment to an issue triggers a run (with or without a leading @)."
+    required: false
+    default: ""
+  label_trigger:
+    description: "Label whose addition to an issue triggers a run."
+    required: false
+    default: "kiro"
+  track_progress:
+    description: "Force tag mode (tracking comment) even when a prompt is provided."
+    required: false
+    default: "false"
+
+  # ---- Branching ----------------------------------------------------------
+  base_branch:
+    description: "Branch to start new work from. Defaults to the repository's default branch."
+    required: false
+    default: ""
+  branch_prefix:
+    description: "Prefix for branches this action creates."
+    required: false
+    default: "kiro/"
+  branch_name_template:
+    description: "Template for generated branch names. Supports {{prefix}}, {{entityType}}, {{entityNumber}}, {{timestamp}}, {{sha}}, {{label}}, {{description}}."
+    required: false
+    default: ""
+
+  # ---- Kiro CLI behaviour -------------------------------------------------
+  effort:
+    description: "Reasoning effort passed to the CLI: low, medium, high, xhigh, or max. Empty leaves the CLI default."
+    required: false
+    default: ""
+  model:
+    description: "Model id to record in the generated agent config. Empty leaves the CLI default."
+    required: false
+    default: ""
+  allowed_tools:
+    description: "Comma-separated extra Kiro tools to grant, e.g. 'web_search,@my_server'. See docs/configuration.md."
+    required: false
+    default: ""
+  allowed_shell_commands:
+    description: "Comma-separated extra shell command patterns to allow, e.g. 'bun test *,bun run build'. Commands that are not allowed are denied, because headless mode cannot prompt."
+    required: false
+    default: ""
+  trust_all_tools:
+    description: "Pass --trust-all-tools to the CLI. This removes tool gating entirely; only use it on trusted input."
+    required: false
+    default: "false"
+  kiro_args:
+    description: "Additional arguments appended to 'kiro-cli chat'. Parsed as argv; shell operators are rejected."
+    required: false
+    default: ""
+  timeout_minutes:
+    description: "Terminate the CLI after this many minutes. Empty means no limit beyond the job timeout."
+    required: false
+    default: ""
+
+  # ---- Filtering and identity --------------------------------------------
+  allowed_bots:
+    description: "Comma-separated bot usernames allowed to trigger a run, or '*' for all bots."
+    required: false
+    default: ""
+  include_comments_by_actor:
+    description: "Comma-separated actors whose comments to include in the prompt. Supports '*[bot]'. Empty includes all."
+    required: false
+    default: ""
+  exclude_comments_by_actor:
+    description: "Comma-separated actors whose comments to exclude from the prompt. Supports '*[bot]'. Exclusion wins over inclusion."
+    required: false
+    default: ""
+  bot_id:
+    description: "User id used for commit attribution. Defaults to github-actions[bot]."
+    required: false
+    default: ""
+  bot_name:
+    description: "Username used for commit attribution. Defaults to github-actions[bot]."
+    required: false
+    default: ""
+
+  # ---- Runtime ------------------------------------------------------------
+  path_to_kiro_cli_executable:
+    description: "Path to an existing kiro-cli binary. Use this to pin a CLI version; otherwise the latest release is installed."
+    required: false
+    default: ""
+  path_to_bun_executable:
+    description: "Path to an existing bun binary. When set, Bun is not installed by this action."
+    required: false
+    default: ""
+  display_report:
+    description: "Append the CLI output to the job summary."
+    required: false
+    default: "true"
+
+outputs:
+  conclusion:
+    description: "'success' or 'failure'."
+    value: ${{ steps.run.outputs.conclusion }}
+  contains_trigger:
+    description: "Whether a trigger condition was met. 'false' means the action did nothing."
+    value: ${{ steps.run.outputs.contains_trigger }}
+  execution_file:
+    description: "Path to the captured CLI output for this run."
+    value: ${{ steps.run.outputs.execution_file }}
+  branch_name:
+    description: "Branch the action created, if any."
+    value: ${{ steps.run.outputs.branch_name }}
+  comment_id:
+    description: "Id of the tracking comment, in tag mode."
+    value: ${{ steps.run.outputs.kiro_comment_id }}
+  github_token:
+    description: "The token the run used. Useful for later steps that should act as the same identity."
+    value: ${{ steps.run.outputs.github_token }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install Bun
+      if: inputs.path_to_bun_executable == ''
+      # Pin this to a commit SHA in your own fork if you need a fully immutable
+      # supply chain; the tag is used here so the action stays usable as-is.
+      uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: 1.3.14
+
+    - name: Resolve the Bun executable
+      id: bun
+      shell: bash
+      env:
+        PATH_TO_BUN: ${{ inputs.path_to_bun_executable }}
+      run: |
+        if [ -n "$PATH_TO_BUN" ]; then
+          echo "bun=$PATH_TO_BUN" >> "$GITHUB_OUTPUT"
+        else
+          echo "bun=bun" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Install action dependencies
+      shell: bash
+      env:
+        BUN: ${{ steps.bun.outputs.bun }}
+      run: |
+        set -euo pipefail
+        # The push wrapper is the only way the agent is allowed to push, so make
+        # sure it is executable even if the checkout dropped the mode bit.
+        chmod +x "$GITHUB_ACTION_PATH/scripts/git-push.sh"
+        cd "$GITHUB_ACTION_PATH"
+        "$BUN" install --production
+
+    - name: Run Kiro
+      id: run
+      shell: bash
+      env:
+        BUN: ${{ steps.bun.outputs.bun }}
+        # Credentials
+        KIRO_API_KEY: ${{ inputs.kiro_api_key }}
+        OVERRIDE_GITHUB_TOKEN: ${{ inputs.github_token }}
+        DEFAULT_WORKFLOW_TOKEN: ${{ github.token }}
+        GITHUB_APP_ID: ${{ inputs.github_app_id }}
+        GITHUB_APP_PRIVATE_KEY: ${{ inputs.github_app_private_key }}
+        ADDITIONAL_PERMISSIONS: ${{ inputs.additional_permissions }}
+        # What to run
+        PROMPT: ${{ inputs.prompt }}
+        CUSTOM_INSTRUCTIONS: ${{ inputs.custom_instructions }}
+        TRIGGER_PHRASE: ${{ inputs.trigger_phrase }}
+        ASSIGNEE_TRIGGER: ${{ inputs.assignee_trigger }}
+        LABEL_TRIGGER: ${{ inputs.label_trigger }}
+        TRACK_PROGRESS: ${{ inputs.track_progress }}
+        # Branching
+        BASE_BRANCH: ${{ inputs.base_branch }}
+        BRANCH_PREFIX: ${{ inputs.branch_prefix }}
+        BRANCH_NAME_TEMPLATE: ${{ inputs.branch_name_template }}
+        # CLI behaviour
+        KIRO_EFFORT: ${{ inputs.effort }}
+        KIRO_MODEL: ${{ inputs.model }}
+        ALLOWED_TOOLS: ${{ inputs.allowed_tools }}
+        ALLOWED_SHELL_COMMANDS: ${{ inputs.allowed_shell_commands }}
+        TRUST_ALL_TOOLS: ${{ inputs.trust_all_tools }}
+        KIRO_ARGS: ${{ inputs.kiro_args }}
+        TIMEOUT_MINUTES: ${{ inputs.timeout_minutes }}
+        # Filtering and identity
+        ALLOWED_BOTS: ${{ inputs.allowed_bots }}
+        INCLUDE_COMMENTS_BY_ACTOR: ${{ inputs.include_comments_by_actor }}
+        EXCLUDE_COMMENTS_BY_ACTOR: ${{ inputs.exclude_comments_by_actor }}
+        BOT_ID: ${{ inputs.bot_id }}
+        BOT_NAME: ${{ inputs.bot_name }}
+        # Runtime
+        PATH_TO_KIRO_CLI_EXECUTABLE: ${{ inputs.path_to_kiro_cli_executable }}
+        PATH_TO_BUN_EXECUTABLE: ${{ steps.bun.outputs.bun }}
+        DISPLAY_REPORT: ${{ inputs.display_report }}
+        GITHUB_RUN_ID: ${{ github.run_id }}
+      run: |
+        "$BUN" --no-env-file \
+          --config="$GITHUB_ACTION_PATH/bunfig.toml" \
+          run "$GITHUB_ACTION_PATH/src/entrypoints/run.ts"
+
+    - name: Revoke the app token
+      if: always() && steps.run.outputs.token_source == 'app' && steps.run.outputs.github_token != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.run.outputs.github_token }}
+      run: |
+        curl -L --connect-timeout 5 --max-time 10 \
+          -X DELETE \
+          -H "Accept: application/vnd.github+json" \
+          -H "Authorization: Bearer $GH_TOKEN" \
+          -H "X-GitHub-Api-Version: 2022-11-28" \
+          "${GITHUB_API_URL:-https://api.github.com}/installation/token" || true

@@ -1,0 +1,44 @@
+# Tag mode: respond when someone writes "@kiro" on an issue or pull request,
+# labels an issue "kiro", or assigns it.
+name: Kiro
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+  issues:
+    types: [opened, labeled, assigned]
+
+jobs:
+  kiro:
+    # Skip the job unless a trigger is plausible, so a runner is not started for
+    # every comment in the repository.
+    if: |
+      contains(github.event.comment.body, '@kiro') ||
+      contains(github.event.review.body, '@kiro') ||
+      contains(github.event.issue.body, '@kiro') ||
+      contains(github.event.issue.title, '@kiro') ||
+      github.event.action == 'labeled' ||
+      github.event.action == 'assigned'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      actions: read # lets Kiro read CI results on a pull request
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so diffs against the base branch work.
+          fetch-depth: 0
+
+      - uses: takuaizu/Kiro-action@v0
+        with:
+          kiro_api_key: ${{ secrets.KIRO_API_KEY }}
+          # Let Kiro verify its own work before it pushes.
+          allowed_shell_commands: "bun install,bun test *,bun run lint"
+          timeout_minutes: 20

@@ -1,0 +1,38 @@
+# Agent mode with a tracking comment: review every pull request as it opens.
+#
+# `track_progress: true` keeps the tracking comment (so the review is posted to
+# the PR) while still using the fixed prompt below instead of waiting for a
+# mention.
+name: Kiro review
+
+on:
+  pull_request:
+    types: [opened, ready_for_review]
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: takuaizu/Kiro-action@v0
+        with:
+          kiro_api_key: ${{ secrets.KIRO_API_KEY }}
+          track_progress: true
+          prompt: |
+            Review this pull request. Do not modify any files.
+
+            Focus on, in order:
+            1. Correctness — logic errors, unhandled failures, off-by-one bounds.
+            2. Security — injected input reaching a shell, a query, or a path.
+            3. Missing tests for the behaviour the diff changes.
+
+            Report only what you are confident about, with file:line references.
+            If the diff looks fine, say so in one sentence rather than inventing
+            nitpicks.

@@ -1,0 +1,41 @@
+# Agent mode: a scheduled maintenance task with no tracking comment.
+#
+# Agent mode does not create a branch, so tell Kiro which branch to work on, or
+# have it write its findings somewhere you then pick up in a later step.
+name: Kiro dependency report
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays, 06:00 UTC
+  workflow_dispatch:
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: takuaizu/Kiro-action@v0
+        id: kiro
+        with:
+          kiro_api_key: ${{ secrets.KIRO_API_KEY }}
+          effort: high
+          allowed_shell_commands: "bun outdated,bun pm ls"
+          prompt: |
+            Summarise this repository's dependency health.
+
+            Write the summary to dependency-report.md in the repository root.
+            Do not modify any other file, and do not commit anything.
+
+      - name: Open an issue with the report
+        if: steps.kiro.outputs.conclusion == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create \
+            --title "Weekly dependency report" \
+            --body-file dependency-report.md

@@ -1,0 +1,29 @@
+{
+  "name": "kiro-action",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Unofficial GitHub Action that runs the Kiro CLI on issues and pull requests",
+  "scripts": {
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@actions/core": "^1.11.1",
+    "@actions/github": "^6.0.1",
+    "@modelcontextprotocol/sdk": "^1.11.0",
+    "@octokit/graphql": "^8.2.2",
+    "@octokit/rest": "^21.1.1",
+    "@octokit/webhooks-types": "^7.6.1",
+    "shell-quote": "^1.8.4",
+    "zod": "^3.24.4"
+  },
+  "devDependencies": {
+    "@types/bun": "1.2.11",
+    "@types/node": "^20.0.0",
+    "@types/shell-quote": "^1.7.5",
+    "prettier": "3.5.3",
+    "typescript": "^5.8.3"
+  }
+}
