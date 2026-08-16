@@ -7,7 +7,10 @@ branding:
 inputs:
   # ---- Credentials --------------------------------------------------------
   kiro_api_key:
-    description: "Kiro API key. Required. Pass it from a secret, e.g. ${{ secrets.KIRO_API_KEY }}."
+    # No ${{ }} expressions anywhere in this manifest outside `runs:` — the
+    # runner parses expressions in descriptions too, and contexts such as
+    # `secrets` do not exist there, which fails the whole manifest.
+    description: "Kiro API key. Required. Pass it from a repository secret, such as secrets.KIRO_API_KEY."
     required: true
   github_token:
     description: "GitHub token to act with. Defaults to the workflow's github.token. Provide a PAT or an app token to have commits and comments attributed to another identity."
