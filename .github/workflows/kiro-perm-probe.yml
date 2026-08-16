@@ -182,3 +182,69 @@ jobs:
           rm -f probe-write.txt
           kiro-cli chat --v3 --no-interactive "Attempt all three in order and report each outcome, quoting any refusal verbatim: 1. Run the shell command: git status --short  2. Run the shell command: curl -s https://example.com  3. Create a file named probe-write.txt containing the text ok" || echo "EXIT=$?"
           echo "file exists: $([ -f probe-write.txt ] && echo yes || echo no)"
+
+      - name: "Case N — V3: do our own allow rules cover git writes, and is fs_write scoped?"
+        run: |
+          rm -f ~/.kiro/settings/permissions.yaml
+          cat > ~/.kiro/agents/probe-3x-scoped.json <<'JSON'
+          {
+            "name": "probe-3x-scoped",
+            "description": "V3 probe: git writes allowed, workspace-scoped writes",
+            "prompt": "You are running in CI. Attempt what you are asked and report each outcome verbatim, including the exact refusal text.",
+            "mcpServers": {},
+            "tools": ["fs_read", "fs_write", "execute_bash", "grep", "glob"],
+            "permissions": {
+              "rules": [
+                { "capability": "fs_read", "effect": "allow" },
+                { "capability": "fs_write", "match": ["./**"], "effect": "allow" },
+                { "capability": "shell", "match": ["git add *", "git commit *", "git status*"], "effect": "allow" },
+                { "capability": "shell", "match": ["curl *", "sudo *", "rm -rf *"], "effect": "deny" }
+              ]
+            },
+            "includeMcpJson": false
+          }
+          JSON
+          git config user.email "probe@example.com"
+          git config user.name "Probe"
+          kiro-cli chat --v3 --no-interactive --agent probe-3x-scoped "Attempt all four in order and report each outcome, quoting refusals verbatim: 1. Create a file named probe-in-repo.txt containing ok  2. Create a file named /tmp/probe-outside-repo.txt containing ok  3. Run the shell command: git add probe-in-repo.txt  4. Run the shell command: git commit -m probe" || echo "EXIT=$?"
+          echo "--- in-repo file: $([ -f probe-in-repo.txt ] && echo yes || echo no)"
+          echo "--- outside-repo file: $([ -f /tmp/probe-outside-repo.txt ] && echo yes || echo no)"
+          echo "--- commits since HEAD~1:"
+          git log --oneline -2 || true
+
+      - name: "Case O — V3: are MCP tools usable, and does an mcp deny rule bite?"
+        run: |
+          mkdir -p /tmp/mcp
+          cat > /tmp/mcp/server.mjs <<'MJS'
+          // Minimal MCP stdio server exposing one tool, so the probe does not
+          // depend on this action's own servers (which need GitHub context).
+          import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+          import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+          import { z } from "zod";
+          const server = new McpServer({ name: "probe-mcp", version: "0.0.1" });
+          server.tool("echo_probe", "Echo a string back", { text: z.string() }, async ({ text }) => ({
+            content: [{ type: "text", text: `echo:${text}` }],
+          }));
+          await server.connect(new StdioServerTransport());
+          MJS
+          cd /tmp/mcp && npm install --silent @modelcontextprotocol/sdk zod >/dev/null 2>&1
+          cd "$GITHUB_WORKSPACE"
+          cat > ~/.kiro/agents/probe-3x-mcp.json <<JSON
+          {
+            "name": "probe-3x-mcp",
+            "description": "V3 probe: MCP tool permission",
+            "prompt": "You are running in CI. Do what you are asked and report the outcome verbatim.",
+            "mcpServers": {
+              "probe": { "command": "node", "args": ["/tmp/mcp/server.mjs"] }
+            },
+            "tools": ["fs_read", "@probe"],
+            "permissions": {
+              "rules": [
+                { "capability": "fs_read", "effect": "allow" },
+                { "capability": "mcp", "match": ["probe/*"], "effect": "allow" }
+              ]
+            },
+            "includeMcpJson": false
+          }
+          JSON
+          kiro-cli chat --v3 --no-interactive --require-mcp-startup --agent probe-3x-mcp "Call the echo_probe tool with text=hello and report exactly what it returned, or quote the refusal." || echo "EXIT=$?"
