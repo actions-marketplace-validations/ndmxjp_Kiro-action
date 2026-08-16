@@ -22,7 +22,12 @@ import { prepareAgentMode } from "../modes/agent";
 import { installKiroCli } from "../kiro/install";
 import { prepareKiroEnvironment } from "../kiro/env";
 import { runKiro, type KiroRunResult } from "../kiro/run";
-import { commitAndPush, type CommitAndPushResult } from "../git/commit";
+import {
+  commitAndPush,
+  snapshotWorkingTree,
+  type CommitAndPushResult,
+  type WorkingTreeSnapshot,
+} from "../git/commit";
 import { KIRO_AGENT_NAME } from "../github/constants";
 import { updateCommentLink } from "./update-comment-link";
 
@@ -122,6 +127,14 @@ export async function run() {
       }
     }
 
+    // Anything dirty at this point was left by the action itself (its own
+    // dependency install when used as `uses: ./`, or the config restore above),
+    // and must not end up in the agent's commit.
+    let baseline: WorkingTreeSnapshot | undefined;
+    if (mode === "tag") {
+      baseline = snapshotWorkingTree();
+    }
+
     kiroResult = await runKiro({
       kiroCommand,
       agentName: KIRO_AGENT_NAME,
@@ -157,6 +170,7 @@ export async function run() {
           context.isPR ? "PR" : "issue"
         } #${context.entityNumber}`,
         coAuthorLine: prepared.coAuthorLine,
+        baseline,
       });
       if (commitResult.changed && !commitResult.pushed) {
         core.warning(

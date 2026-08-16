@@ -6,6 +6,14 @@ import { stripInvisibleCharacters } from "../github/utils/sanitizer";
 /** Longest commit message we will pass on to git, subject and body together. */
 const MAX_MESSAGE_BYTES = 8 * 1024;
 
+/**
+ * Paths that were already dirty before the agent ran, mapped to the hash of
+ * their contents at that moment. Used to keep changes the action itself made —
+ * its own `bun install`, or the sensitive-config restore on a pull request —
+ * out of the agent's commit.
+ */
+export type WorkingTreeSnapshot = Map<string, string>;
+
 export type CommitAndPushParams = {
   /** Branch to push to. Must already be validated with validateBranchName. */
   branch: string;
@@ -15,6 +23,8 @@ export type CommitAndPushParams = {
   fallbackSubject: string;
   /** `Co-authored-by:` trailer to append, if the trigger user is known. */
   coAuthorLine?: string;
+  /** Working tree state from before the run; see WorkingTreeSnapshot. */
+  baseline?: WorkingTreeSnapshot;
 };
 
 export type CommitAndPushResult = {
@@ -31,7 +41,76 @@ function git(args: string[]): string {
     encoding: "utf8",
     env: process.env,
     stdio: ["ignore", "pipe", "pipe"],
+    maxBuffer: 64 * 1024 * 1024,
   });
+}
+
+/**
+ * Paths git reports as changed, including untracked files individually
+ * (`-uall`, so an untracked directory does not collapse into one entry that
+ * cannot be hashed or staged precisely).
+ */
+function changedPaths(): string[] {
+  const entries = git(["status", "--porcelain=1", "-z", "-uall"])
+    .split("\0")
+    .filter((entry) => entry.length > 0);
+
+  const paths: string[] = [];
+  for (let index = 0; index < entries.length; index++) {
+    const entry = entries[index]!;
+    const code = entry.slice(0, 2);
+    const path = entry.slice(3);
+    if (path) {
+      paths.push(path);
+    }
+    // A rename entry is followed by its origin path as a separate NUL field.
+    if (code.startsWith("R") || code.startsWith("C")) {
+      const origin = entries[++index];
+      if (origin) {
+        paths.push(origin);
+      }
+    }
+  }
+  return paths;
+}
+
+/** Hash of a path's current contents, or "absent" when it is gone. */
+function contentHash(path: string): string {
+  if (!existsSync(path)) {
+    return "absent";
+  }
+  try {
+    return git(["hash-object", "--", path]).trim();
+  } catch {
+    // Directories and unreadable paths cannot be hashed; treat them as changed
+    // so they are never silently skipped.
+    return `unhashable:${Math.random()}`;
+  }
+}
+
+/**
+ * Records what is already dirty before the agent runs, so its commit contains
+ * only what it actually changed.
+ */
+export function snapshotWorkingTree(): WorkingTreeSnapshot {
+  const snapshot: WorkingTreeSnapshot = new Map();
+  try {
+    for (const path of changedPaths()) {
+      snapshot.set(path, contentHash(path));
+    }
+  } catch (error) {
+    core.warning(
+      `Could not snapshot the working tree; the commit may include unrelated changes: ${error}`,
+    );
+  }
+  if (snapshot.size > 0) {
+    core.info(
+      `Ignoring ${snapshot.size} path(s) that were already modified before the run: ${[
+        ...snapshot.keys(),
+      ].join(", ")}`,
+    );
+  }
+  return snapshot;
 }
 
 /**
@@ -46,37 +125,45 @@ function git(args: string[]): string {
 export function commitAndPush(
   params: CommitAndPushParams,
 ): CommitAndPushResult {
-  const { branch, messageFile, fallbackSubject, coAuthorLine } = params;
+  const { branch, messageFile, fallbackSubject, coAuthorLine, baseline } =
+    params;
 
-  let status: string;
+  let paths: string[];
   try {
-    status = git(["status", "--porcelain"]);
+    paths = changedPaths().filter(
+      (path) =>
+        !baseline?.has(path) || baseline.get(path) !== contentHash(path),
+    );
   } catch (error) {
     core.warning(`Could not read git status; skipping the commit: ${error}`);
     return { changed: false, committed: false, pushed: false };
   }
 
-  if (status.trim().length === 0) {
+  if (paths.length === 0) {
     core.info("Kiro made no file changes; nothing to commit.");
     return { changed: false, committed: false, pushed: false };
   }
 
-  core.info(`Working tree has changes:\n${status.trim()}`);
+  core.info(`Kiro changed ${paths.length} path(s):\n${paths.join("\n")}`);
 
   const message = buildMessage(messageFile, fallbackSubject, coAuthorLine);
 
   try {
-    git(["add", "-A"]);
+    // Stage only what the agent touched. `git add -A` would also pick up
+    // whatever the action itself left in the working tree.
+    for (let index = 0; index < paths.length; index += 200) {
+      git(["add", "--", ...paths.slice(index, index + 200)]);
+    }
   } catch (error) {
     core.warning(`Could not stage changes: ${error}`);
     return { changed: true, committed: false, pushed: false };
   }
 
-  // `git add -A` can end up staging nothing (for example when every change is
-  // to an ignored path), and `git commit` fails outright in that case.
+  // Staging can still end up empty (for example when every changed path is
+  // ignored), and `git commit` fails outright in that case.
   try {
     git(["diff", "--cached", "--quiet"]);
-    core.info("Nothing staged after `git add -A`; not committing.");
+    core.info("Nothing staged after adding those paths; not committing.");
     return { changed: true, committed: false, pushed: false };
   } catch {
     // Non-zero exit means there are staged changes, which is what we want.
