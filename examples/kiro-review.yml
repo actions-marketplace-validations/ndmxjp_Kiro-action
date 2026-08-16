@@ -21,7 +21,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: takuaizu/Kiro-action@v0
+      - uses: ndmxjp/Kiro-action@v0
         with:
           kiro_api_key: ${{ secrets.KIRO_API_KEY }}
           track_progress: true

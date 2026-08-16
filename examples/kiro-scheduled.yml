@@ -19,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: takuaizu/Kiro-action@v0
+      - uses: ndmxjp/Kiro-action@v0
         id: kiro
         with:
           kiro_api_key: ${{ secrets.KIRO_API_KEY }}

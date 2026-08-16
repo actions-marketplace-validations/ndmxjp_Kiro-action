@@ -1,0 +1,20 @@
+kiro-action
+
+Copyright (c) 2026 Takumi Saito
+Licensed under the MIT License; see LICENSE.
+
+This project is a port of anthropics/claude-code-action to the Kiro CLI:
+
+    claude-code-action
+    Copyright (c) 2025 Anthropic, PBC
+    Licensed under the MIT License
+    https://github.com/anthropics/claude-code-action
+
+Files under src/github/ in particular derive from that project, and several
+retain its structure and comments. Its licence terms are the same as this
+project's, and the attribution above is provided in addition to, not instead
+of, the notice in LICENSE.
+
+This project is not affiliated with, sponsored by, or endorsed by Amazon Web
+Services. "Kiro" and "Amazon Web Services" are trademarks of Amazon.com, Inc.
+or its affiliates.

@@ -11,6 +11,15 @@ by editing a single tracking comment.
 > trademarks of Amazon.com, Inc. or its affiliates. It is a port of
 > [anthropics/claude-code-action](https://github.com/anthropics/claude-code-action)
 > (MIT) to the Kiro CLI.
+>
+> The Kiro project publishes its own action at
+> [kirodotdev-labs/kiro-action](https://github.com/kirodotdev-labs/kiro-action),
+> which covers the same ground. If you want the one closest to the Kiro project,
+> use that. This one exists to carry over claude-code-action's hardening: content
+> pinned to trigger time, prompt-injection stripping, CLI-executed config restored
+> from the base branch on pull requests, a shell scoped to named commands, writes
+> confined to the checkout, and commits made by the action rather than by the
+> model.
 
 ## Quick start
 
@@ -48,7 +57,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: takuaizu/Kiro-action@v0
+      - uses: ndmxjp/Kiro-action@v0
         with:
           kiro_api_key: ${{ secrets.KIRO_API_KEY }}
 ```
@@ -74,7 +83,7 @@ creation: the workflow decides what happens. Use it for scheduled jobs, labels
 that kick off a fixed task, or `workflow_dispatch`.
 
 ```yaml
-- uses: takuaizu/Kiro-action@v0
+- uses: ndmxjp/Kiro-action@v0
   with:
     kiro_api_key: ${{ secrets.KIRO_API_KEY }}
     prompt: |
