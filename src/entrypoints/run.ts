@@ -304,5 +304,10 @@ async function writeStepSummary(outputFile: string): Promise<void> {
 }
 
 if (import.meta.main) {
-  run();
+  run().then(() => {
+    // Exit explicitly rather than waiting for the event loop to drain. The CLI's
+    // KAS server can outlive it and keep a handle open, and core.setFailed has
+    // already set the exit code by this point.
+    process.exit(process.exitCode ?? 0);
+  });
 }

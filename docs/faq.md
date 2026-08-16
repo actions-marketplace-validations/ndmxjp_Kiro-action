@@ -83,6 +83,7 @@ Set `timeout_minutes`. The action terminates the CLI — the whole process group
 a surviving child cannot keep the job alive — and still updates the tracking
 comment with the failure.
 
-On `agent_engine: v3` the CLI does not exit even after it has answered, so the
-action shuts it down after 90 seconds of silence and treats that as a normal
-finish. The execution log says so when it happens.
+On `agent_engine: v3` the CLI leaves a KAS server running after it answers. The
+action kills the whole process group and releases the pipes, so that does not stall
+the job. If a run ever goes quiet without finishing, 90 seconds of silence is
+treated as completion and the execution log says so.

@@ -50,12 +50,10 @@ export type RunKiroParams = {
   /** "v3" adds --v3, selecting the KAS agent engine. */
   engine: "v2" | "v3";
   /**
-   * Treat this many seconds of silence as the run having finished.
-   *
-   * The v3 engine does not exit in `--no-interactive` mode: on a measured run it
-   * printed its complete answer and then sat there until the job timed out. Since
-   * the work is done at that point, going quiet is the only available completion
-   * signal.
+   * Treat this many seconds of silence as the run having finished — a safety net
+   * for a CLI that stalls without exiting. Not the mechanism that ends a normal
+   * v3 run: there the CLI exits by itself and it is the KAS server it leaves
+   * behind that has to be cleaned up (see below).
    */
   idleTimeoutSeconds?: number;
   prompt: string;
@@ -109,9 +107,12 @@ export async function runKiro(params: RunKiroParams): Promise<KiroRunResult> {
 
   // No shell: the prompt and every argument are passed straight to the binary,
   // so nothing in them can be reinterpreted as a shell command.
-  // detached puts the CLI in its own process group. On v3 it starts a KAS server
-  // as a grandchild, and signalling only the CLI leaves that server alive holding
-  // the pipes — which is why terminating the group is the only thing that works.
+  // detached puts the CLI in its own process group, so the whole group can be
+  // signalled at once. That matters because on v3 the CLI starts a KAS server as
+  // a grandchild which outlives it: measured, the CLI printed its answer and
+  // exited, and the server stayed up holding stdout. Signalling the CLI alone
+  // does nothing (it is already gone), and leaving the group alive keeps this
+  // process from exiting.
   const child = spawn(kiroCommand, args, {
     stdio: ["ignore", "pipe", "pipe"],
     env: process.env,
@@ -208,6 +209,15 @@ export async function runKiro(params: RunKiroParams): Promise<KiroRunResult> {
   // Give output still in flight a moment to arrive: "exit" can fire before the
   // pipes have been drained.
   await new Promise((resolve) => setTimeout(resolve, 250));
+
+  // Reap anything the CLI left behind, then let go of the pipes. Without this the
+  // surviving KAS server keeps the stdio streams open, and an open stream keeps
+  // this process alive: the action would finish all of its work and then hang
+  // until the job timed out, which is exactly what happened before this was here.
+  terminate();
+  child.stdout?.destroy();
+  child.stderr?.destroy();
+  child.unref();
 
   const durationMs = Date.now() - startedAt;
 

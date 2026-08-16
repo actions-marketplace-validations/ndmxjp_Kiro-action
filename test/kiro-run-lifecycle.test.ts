@@ -105,7 +105,28 @@ describe("runKiro lifecycle", () => {
     expect(output).toContain("does not exit on its own");
   });
 
-  test("returns even when a grandchild keeps the pipes open", async () => {
+  test("returns promptly when the CLI exits but leaves a server holding the pipes", async () => {
+    const { promptFile, outputFile } = paths();
+    const startedAt = Date.now();
+
+    // The measured v3 shape: the CLI answers, exits, and the KAS server it
+    // started stays up with stdout still open. Waiting on "close" hangs here;
+    // waiting on "exit" does not. No idle timeout is configured on purpose —
+    // nothing but the exit event can end this run.
+    const result = await runKiro({
+      ...base,
+      kiroCommand: fakeCli('sleep 600 & echo "the answer"; exit 0'),
+      promptFile,
+      outputFile,
+    });
+
+    expect(Date.now() - startedAt).toBeLessThan(15_000);
+    expect(result.exitCode).toBe(0);
+    expect(result.reason).toBe("success");
+    expect(readFileSync(outputFile, "utf8")).toContain("the answer");
+  });
+
+  test("returns even when a grandchild keeps the pipes open and the CLI hangs too", async () => {
     const { promptFile, outputFile } = paths();
     const startedAt = Date.now();
 
