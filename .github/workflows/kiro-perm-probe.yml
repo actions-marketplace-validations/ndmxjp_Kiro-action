@@ -248,3 +248,78 @@ jobs:
           }
           JSON
           kiro-cli chat --v3 --no-interactive --require-mcp-startup --agent probe-3x-mcp "Call the echo_probe tool with text=hello and report exactly what it returned, or quote the refusal." || echo "EXIT=$?"
+
+      - name: "MCP preflight — does the throwaway server actually start?"
+        run: |
+          mkdir -p /tmp/mcp2
+          cat > /tmp/mcp2/server.mjs <<'MJS'
+          import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+          import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+          import { z } from "zod";
+          const server = new McpServer({ name: "probe-mcp", version: "0.0.1" });
+          server.tool("echo_probe", "Echo a string back", { text: z.string() }, async ({ text }) => ({
+            content: [{ type: "text", text: `echo:${text}` }],
+          }));
+          await server.connect(new StdioServerTransport());
+          MJS
+          cd /tmp/mcp2
+          npm install --no-audit --no-fund @modelcontextprotocol/sdk zod 2>&1 | tail -2
+          # Speak just enough MCP to prove the server responds to initialize.
+          printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"probe","version":"0"}}}' \
+            | timeout 10 node /tmp/mcp2/server.mjs | head -c 400 || true
+          echo
+          echo "(a JSON-RPC result above means the server works)"
+
+      - name: "Case P — V3 with MCP, no tools field (everything available)"
+        run: |
+          cat > ~/.kiro/agents/probe-mcp-p.json <<'JSON'
+          {
+            "name": "probe-mcp-p",
+            "description": "V3 MCP probe: no tools field",
+            "prompt": "You are running in CI. List the tools you can see, then do what you are asked.",
+            "mcpServers": { "probe": { "command": "node", "args": ["/tmp/mcp2/server.mjs"] } },
+            "permissions": {
+              "rules": [
+                { "capability": "fs_read", "effect": "allow" },
+                { "capability": "mcp", "match": ["probe/*"], "effect": "allow" }
+              ]
+            },
+            "includeMcpJson": false
+          }
+          JSON
+          kiro-cli chat --v3 --no-interactive --require-mcp-startup --agent probe-mcp-p "First list every tool name you can see. Then call echo_probe with text=hello and report exactly what it returned, or quote the refusal." || echo "EXIT=$?"
+
+      - name: "Case Q — V3 with MCP, tools uses the @server/tool form"
+        run: |
+          cat > ~/.kiro/agents/probe-mcp-q.json <<'JSON'
+          {
+            "name": "probe-mcp-q",
+            "description": "V3 MCP probe: @server/tool in tools",
+            "prompt": "You are running in CI. List the tools you can see, then do what you are asked.",
+            "mcpServers": { "probe": { "command": "node", "args": ["/tmp/mcp2/server.mjs"] } },
+            "tools": ["fs_read", "@probe/echo_probe"],
+            "permissions": {
+              "rules": [
+                { "capability": "fs_read", "effect": "allow" },
+                { "capability": "mcp", "match": ["probe/*"], "effect": "allow" }
+              ]
+            },
+            "includeMcpJson": false
+          }
+          JSON
+          kiro-cli chat --v3 --no-interactive --require-mcp-startup --agent probe-mcp-q "First list every tool name you can see. Then call echo_probe with text=hello and report exactly what it returned, or quote the refusal." || echo "EXIT=$?"
+
+      - name: "Case R — V2 (default engine) with MCP and allowedTools"
+        run: |
+          cat > ~/.kiro/agents/probe-mcp-r.json <<'JSON'
+          {
+            "name": "probe-mcp-r",
+            "description": "V2 MCP probe",
+            "prompt": "You are running in CI. List the tools you can see, then do what you are asked.",
+            "mcpServers": { "probe": { "command": "node", "args": ["/tmp/mcp2/server.mjs"] } },
+            "tools": ["fs_read", "@probe"],
+            "allowedTools": ["fs_read", "@probe"],
+            "includeMcpJson": false
+          }
+          JSON
+          kiro-cli chat --no-interactive --require-mcp-startup --agent probe-mcp-r "First list every tool name you can see. Then call echo_probe with text=hello and report exactly what it returned, or quote the refusal." || echo "EXIT=$?"
