@@ -48,9 +48,12 @@ const SENSITIVE_PATHS = [
  * with the versions from the PR base branch, which a maintainer has reviewed and
  * merged. Paths that do not exist on base stay deleted.
  *
- * Known limitation: if a PR legitimately modifies `.kiro/` and Kiro later
- * commits with `git add -A`, the revert is included in that commit. That is a
- * narrow UX tradeoff for closing the code-execution surface.
+ * The restore shows up as a working-tree change, but it does not ride along in
+ * the agent's commit: src/git/commit.ts snapshots the tree immediately before the
+ * CLI starts and stages only paths that differ from that snapshot. Verified on a
+ * test pull request, where the log read "Ignoring 2 path(s) that were already
+ * modified before the run: .kiro/steering/injected.md, bun.lock" and the run
+ * committed nothing.
  *
  * Also note that only the paths below come from the base branch; the rest of the
  * working tree stays at the PR head. A base-branch hook that calls out through
