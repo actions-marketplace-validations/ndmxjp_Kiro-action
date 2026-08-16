@@ -516,3 +516,51 @@ jobs:
           echo "--- in-repo file:      $([ -f probe-in-repo.txt ] && echo yes || echo no)"
           echo "--- outside-repo file: $([ -f /tmp/probe-outside-repo.txt ] && echo yes || echo no)"
           echo "--- last commit:"; git log --oneline -1
+
+      - name: "Case BB — does anything survive the CLI in --v3 --no-interactive?"
+        run: |
+          cat > ~/.kiro/agents/probe-bb.json <<'JSON'
+          {
+            "name": "probe-bb",
+            "description": "Lifecycle probe",
+            "prompt": "You are running in CI. Answer briefly.",
+            "mcpServers": {},
+            "permissions": { "rules": [{ "capability": "fs_read", "effect": "allow" }] }
+          }
+          JSON
+          echo "--- processes before:"
+          pgrep -fa "kiro|kas" || echo "  (none)"
+
+          # Run the CLI with its output through a pipe, exactly as a CI wrapper
+          # would, and record when the CLI process itself exits.
+          ( kiro-cli chat --v3 --no-interactive --agent probe-bb "Reply with the single word: done" > /tmp/bb-out.txt 2>&1 & echo $! > /tmp/bb.pid )
+          CLI_PID=$(cat /tmp/bb.pid)
+          echo "--- CLI pid: $CLI_PID"
+          for i in $(seq 1 60); do
+            kill -0 "$CLI_PID" 2>/dev/null || { echo "--- CLI exited after ${i}s"; break; }
+            sleep 1
+          done
+
+          echo "--- CLI output:"; cat /tmp/bb-out.txt | sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g' | tail -5
+          echo "--- processes 5s after the CLI exited:"
+          sleep 5
+          pgrep -fa "kiro|kas" || echo "  (none survived)"
+
+          echo "--- who holds the pipe (fd table of survivors):"
+          for pid in $(pgrep -f "kas|kiro" || true); do
+            echo "  pid $pid: $(tr '\0' ' ' < /proc/$pid/cmdline 2>/dev/null | cut -c1-120)"
+            ls -l /proc/$pid/fd 2>/dev/null | grep -c pipe | sed 's/^/    open pipes: /'
+          done
+
+          # A parent that waits for stdout to close, which is what a naive
+          # wrapper does. Times out if the pipe is still held.
+          echo "--- can a parent that waits for EOF on stdout finish?"
+          timeout 30 node -e '
+            const { spawn } = require("child_process");
+            const t0 = Date.now();
+            const c = spawn("kiro-cli", ["chat","--v3","--no-interactive","--agent","probe-bb","Reply with the single word: done"], { stdio: ["ignore","pipe","pipe"] });
+            c.stdout.on("data", () => {});
+            c.stderr.on("data", () => {});
+            c.on("exit", (code) => console.log(`  exit event after ${((Date.now()-t0)/1000).toFixed(1)}s, code=${code}`));
+            c.on("close", () => console.log(`  close event after ${((Date.now()-t0)/1000).toFixed(1)}s`));
+          ' || echo "  (the node parent was still waiting after 30s — close never fired)"
