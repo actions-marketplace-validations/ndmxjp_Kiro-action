@@ -4,14 +4,24 @@
 Writes RGBA PNG frames and hands them to ffmpeg to assemble an APNG (which keeps
 the alpha channel, so the icon sits on either GitHub theme) and a GIF fallback.
 
-Deliberately not the Kiro logo: this action is unofficial, and shipping someone
-else's mark with it would imply otherwise. It draws a rotating arc instead.
+Two modes:
+
+    --mode arc              a rotating violet arc, owing nothing to anyone
+    --mode pulse --logo P   an existing icon, breathing
+
+`pulse` exists so the Kiro mark can be used without being altered: every frame
+holds the source pixels exactly as they are and only the overall alpha changes, so
+the mark is never rotated, cropped, recoloured, or resampled. At the ~14px the
+comment renders it at, a ring around the mark would collapse to less than a pixel,
+which is why the motion is a fade rather than a spinner.
 
 Usage:
-    python3 scripts/make-working-indicator.py [--out-dir assets] [--size 48]
+    python3 scripts/make-working-indicator.py --mode arc
+    python3 scripts/make-working-indicator.py --mode pulse --logo assets/kiro-mark.png
 
-Requires ffmpeg on PATH. No Python dependencies — the PNG encoder is inline
-because the runners this repository targets have no imaging library.
+Requires ffmpeg on PATH. No Python dependencies — the PNG encoder is inline, and
+decoding is handed to ffmpeg, because the machines this runs on have no imaging
+library.
 """
 
 from __future__ import annotations
@@ -124,26 +134,72 @@ def render_frame(size: int, turn: float) -> bytes:
     return bytes(out)
 
 
+# How far the mark fades at the dimmest point of the cycle.
+PULSE_FLOOR = 0.35
+
+
+def read_rgba(path: Path) -> tuple[int, int, bytes]:
+    """Decode an image to raw RGBA via ffmpeg, since there is no decoder here."""
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0",
+         "-show_entries", "stream=width,height", "-of", "csv=p=0", str(path)],
+        check=True, capture_output=True, text=True,
+    )
+    width, height = (int(value) for value in probe.stdout.strip().split(",")[:2])
+    raw = subprocess.run(
+        ["ffmpeg", "-v", "error", "-i", str(path), "-frames:v", "1",
+         "-f", "rawvideo", "-pix_fmt", "rgba", "-"],
+        check=True, capture_output=True,
+    )
+    return width, height, raw.stdout
+
+
+def render_pulse_frame(pixels: bytes, factor: float) -> bytes:
+    """The source image with its alpha scaled — colour channels untouched."""
+    out = bytearray(pixels)
+    for offset in range(3, len(out), 4):
+        out[offset] = round(out[offset] * factor)
+    return bytes(out)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--out-dir", default="assets", type=Path)
     parser.add_argument("--size", default=48, type=int)
+    parser.add_argument("--mode", default="arc", choices=("arc", "pulse"))
+    parser.add_argument("--logo", type=Path, help="source icon for --mode pulse")
+    parser.add_argument("--name", default=None, help="output basename")
     args = parser.parse_args()
+
+    if args.mode == "pulse" and not args.logo:
+        print("--mode pulse needs --logo", file=sys.stderr)
+        return 1
 
     if not shutil.which("ffmpeg"):
         print("ffmpeg is required and was not found on PATH", file=sys.stderr)
         return 1
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
-    apng = args.out_dir / "kiro-working.png"
-    gif = args.out_dir / "kiro-working.gif"
+    stem = args.name or ("kiro-working" if args.mode == "arc" else "kiro-mark-working")
+    apng = args.out_dir / f"{stem}.png"
+    gif = args.out_dir / f"{stem}.gif"
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
-        for index in range(FRAMES):
-            frame = render_frame(args.size, index / FRAMES)
-            write_png(tmp_path / f"frame{index:03d}.png", args.size, args.size, frame)
-        print(f"rendered {FRAMES} frames at {args.size}x{args.size}")
+        if args.mode == "arc":
+            width = height = args.size
+            for index in range(FRAMES):
+                frame = render_frame(args.size, index / FRAMES)
+                write_png(tmp_path / f"frame{index:03d}.png", width, height, frame)
+        else:
+            width, height, source = read_rgba(args.logo)
+            for index in range(FRAMES):
+                # Smooth in and out, so there is no visible seam on loop.
+                phase = 0.5 + 0.5 * math.cos(math.tau * index / FRAMES)
+                factor = PULSE_FLOOR + (1 - PULSE_FLOOR) * phase
+                frame = render_pulse_frame(source, factor)
+                write_png(tmp_path / f"frame{index:03d}.png", width, height, frame)
+        print(f"rendered {FRAMES} {args.mode} frames at {width}x{height}")
 
         fps = 1000 / FRAME_DELAY_MS
         common = ["-y", "-framerate", f"{fps:g}", "-i", str(tmp_path / "frame%03d.png")]
