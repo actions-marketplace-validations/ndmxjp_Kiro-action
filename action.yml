@@ -131,6 +131,10 @@ inputs:
     description: "Path to an existing bun binary. When set, Bun is not installed by this action."
     required: false
     default: ""
+  working_indicator:
+    description: "Markdown or HTML shown next to 'Kiro is working…' while a run is in progress, e.g. an <img> pointing at an animated asset. Defaults to an emoji."
+    required: false
+    default: ""
   display_report:
     description: "Append the CLI output to the job summary."
     required: false
@@ -232,6 +236,7 @@ runs:
         # Runtime
         PATH_TO_KIRO_CLI_EXECUTABLE: ${{ inputs.path_to_kiro_cli_executable }}
         PATH_TO_BUN_EXECUTABLE: ${{ steps.bun.outputs.bun }}
+        WORKING_INDICATOR: ${{ inputs.working_indicator }}
         DISPLAY_REPORT: ${{ inputs.display_report }}
         GITHUB_RUN_ID: ${{ github.run_id }}
       run: |

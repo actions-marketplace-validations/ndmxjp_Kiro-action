@@ -125,6 +125,11 @@ trigger a run.
 Outputs: `conclusion`, `contains_trigger`, `execution_file`, `branch_name`,
 `comment_id`, `github_token`.
 
+While a run is going the comment reads `Kiro is working… ⏳` and the agent rewrites
+it as the work advances. For a moving indicator, point `working_indicator` at an
+animated image — see
+[docs/configuration.md](docs/configuration.md#an-animated-in-progress-indicator).
+
 ## Permissions and safety
 
 The action runs an LLM against content that anyone can write, so read

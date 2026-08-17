@@ -1,9 +1,39 @@
 import { describe, expect, test } from "bun:test";
 import { updateCommentBody } from "../src/github/operations/comment-logic";
+import { workingMessage } from "../src/github/operations/comments/common";
 
 const jobUrl = "https://github.com/o/r/actions/runs/123";
 
+const ANIMATED =
+  '<img src="https://github.com/user-attachments/assets/abc" width="14" height="14" />';
+
+describe("workingMessage", () => {
+  test("falls back to the emoji when nothing is configured", () => {
+    expect(workingMessage()).toBe("Kiro is working… ⏳");
+    expect(workingMessage("   ")).toBe("Kiro is working… ⏳");
+  });
+
+  test("uses whatever the workflow supplied", () => {
+    expect(workingMessage(ANIMATED)).toBe(`Kiro is working… ${ANIMATED}`);
+  });
+});
+
 describe("updateCommentBody", () => {
+  test("strips an image indicator, not just the emoji", () => {
+    const body = updateCommentBody({
+      currentBody: `${workingMessage(ANIMATED)}\n\nthinking about it`,
+      actionFailed: false,
+      executionDetails: null,
+      jobUrl,
+      triggerUsername: "octocat",
+    });
+
+    expect(body).not.toContain("<img");
+    expect(body).not.toContain("Kiro is working");
+    expect(body).toContain("thinking about it");
+    expect(body).toContain("**Kiro finished @octocat's task**");
+  });
+
   test("replaces the working marker with a finished header", () => {
     const body = updateCommentBody({
       currentBody:

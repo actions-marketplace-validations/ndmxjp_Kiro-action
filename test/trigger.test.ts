@@ -21,6 +21,7 @@ const inputs: ActionInputs = {
   allowedShellCommands: "",
   trustAllTools: false,
   agentEngine: "v2",
+  workingIndicator: "",
 };
 
 function issueCommentContext(body: string): ParsedGitHubContext {

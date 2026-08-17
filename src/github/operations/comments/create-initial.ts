@@ -18,7 +18,11 @@ export async function createInitialComment(
   const { owner, repo } = context.repository;
 
   const jobRunLink = createJobRunLink(owner, repo, context.runId);
-  const initialBody = createCommentBody(jobRunLink);
+  const initialBody = createCommentBody(
+    jobRunLink,
+    "",
+    context.inputs.workingIndicator,
+  );
 
   const recordCommentId = (id: number) => {
     const githubOutput = process.env.GITHUB_OUTPUT;

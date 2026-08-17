@@ -30,7 +30,11 @@ export async function updateTrackingComment(
     branchLink = createBranchLink(owner, repo, branch);
   }
 
-  const updatedBody = createCommentBody(jobRunLink, branchLink);
+  const updatedBody = createCommentBody(
+    jobRunLink,
+    branchLink,
+    context.inputs.workingIndicator,
+  );
 
   try {
     const isPRReviewComment = isPullRequestReviewCommentEvent(context);

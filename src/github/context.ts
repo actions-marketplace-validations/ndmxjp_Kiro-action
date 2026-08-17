@@ -101,6 +101,11 @@ export type ActionInputs = {
   /** Escape hatch: pass `--trust-all-tools` to the Kiro CLI. */
   trustAllTools: boolean;
   /**
+   * Markdown or HTML shown next to "Kiro is working…" while the run is in
+   * progress. Empty falls back to an emoji.
+   */
+  workingIndicator: string;
+  /**
    * Which Kiro agent engine to run: "v2" (the CLI default) or "v3". v3 enforces
    * capability rules but ignores agent-declared MCP servers, so tag mode loses
    * its reporting channel there. See docs/security.md.
@@ -180,6 +185,7 @@ export function parseGitHubContext(): GitHubContext {
       allowedTools: process.env.ALLOWED_TOOLS ?? "",
       allowedShellCommands: process.env.ALLOWED_SHELL_COMMANDS ?? "",
       trustAllTools: process.env.TRUST_ALL_TOOLS === "true",
+      workingIndicator: process.env.WORKING_INDICATOR ?? "",
       agentEngine: process.env.AGENT_ENGINE === "v3" ? "v3" : "v2",
     } satisfies ActionInputs,
   };
