@@ -1,4 +1,4 @@
-name: "Kiro Action"
+name: "Kiro CLI Agent (Community)"
 description: "Run the Kiro CLI on GitHub issues and pull requests. Unofficial community action; not affiliated with AWS."
 branding:
   icon: "cpu"

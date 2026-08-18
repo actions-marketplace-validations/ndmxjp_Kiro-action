@@ -38,6 +38,15 @@ Kiro's commits.
 That is the identity of the default token. Set `github_token` to a PAT or app
 token and set `bot_name`/`bot_id` to that identity.
 
+## Why is the Marketplace listing named differently from the repository?
+
+The listing is "Kiro CLI Agent (Community)" while the repository is
+`ndmxjp/Kiro-action`. Marketplace listing names are a single flat namespace and
+"Kiro Action" is already taken by
+[kirodotdev-labs/kiro-action](https://github.com/kirodotdev-labs/kiro-action).
+Repository names are per-owner, so the repo keeps its name and
+`uses: ndmxjp/Kiro-action@v0` is unaffected.
+
 ## Can I pin the Kiro CLI version?
 
 Not through an input: the install script always fetches the latest release.
