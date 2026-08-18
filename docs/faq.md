@@ -40,12 +40,16 @@ token and set `bot_name`/`bot_id` to that identity.
 
 ## Why is the Marketplace listing named differently from the repository?
 
-The listing is "Kiro CLI Agent (Community)" while the repository is
-`ndmxjp/Kiro-action`. Marketplace listing names are a single flat namespace and
-"Kiro Action" is already taken by
+The listing is "Kiro CLI Action" while the repository is `ndmxjp/Kiro-action`.
+Marketplace listing names are a single flat namespace, and "Kiro Action" is already
+taken by
 [kirodotdev-labs/kiro-action](https://github.com/kirodotdev-labs/kiro-action).
 Repository names are per-owner, so the repo keeps its name and
 `uses: ndmxjp/Kiro-action@v0` is unaffected.
+
+The name says nothing about who publishes it, so check the listing's description
+and this repository's README: this is an unofficial community action, and the Kiro
+project's own is the one named "Kiro Action".
 
 ## Can I pin the Kiro CLI version?
 
