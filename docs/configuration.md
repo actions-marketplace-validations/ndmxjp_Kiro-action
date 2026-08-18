@@ -76,12 +76,13 @@ agent rewrites the comment as it works, so its checklist visibly advances. The
 emoji itself does not move — GitHub renders emoji as static images.
 
 To replace it with something animated, supply an APNG or GIF (an animated SVG will
-not play in a comment). The image cannot simply live in the repository and be
-linked: the comment renderer fetches images server-side, so a
-`raw.githubusercontent.com` link into a private repository fails. Upload it once by
-dragging it into the comment box of any issue in your repository, which inserts a
-`https://github.com/user-attachments/assets/<id>` URL, then discard the draft
-comment and pass that URL in:
+not play in a comment). Do not link a file committed to the repository: GitHub
+serves comment images through an image proxy rather than fetching them directly, so
+a `raw.githubusercontent.com` link is unreliable in general, and outright broken for
+a private repository because the proxy cannot authenticate to it. Instead upload the
+image once by dragging it into the comment box of any issue, which inserts a
+`https://github.com/user-attachments/assets/<id>` URL; discard the draft comment and
+pass that URL in:
 
 ```yaml
 with:
@@ -89,8 +90,10 @@ with:
   working_indicator: '<img src="https://github.com/user-attachments/assets/<id>" width="14" height="14" style="vertical-align: middle" />'
 ```
 
-On a private repository that URL renders only for people who can see the
-repository — which is who the comment is for anyway.
+That URL inherits the visibility of the repository you uploaded it in: uploaded from
+a public repository it loads for anyone, from a private one only for people who can
+see that repository. Either way it renders for whoever can read the comment it
+appears in, so upload it somewhere the intended readers can reach.
 
 ## Outputs
 
