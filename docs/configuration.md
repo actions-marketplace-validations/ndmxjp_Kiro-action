@@ -67,6 +67,30 @@ the run.
 | `path_to_kiro_cli_executable` | `""`    | Use an existing binary instead of installing. This is the way to pin a CLI version; the install script always fetches the latest. |
 | `path_to_bun_executable`      | `""`    | Use an existing Bun instead of installing one.                                                                                    |
 | `display_report`              | `true`  | Append the CLI output to the job summary.                                                                                         |
+| `working_indicator`           | `""`    | Markdown or HTML shown beside "Kiro is working…" while a run is in progress. Empty means the ⏳ emoji.                            |
+
+### An animated in-progress indicator
+
+The tracking comment says `Kiro is working… ⏳` while the run is going, and the
+agent rewrites the comment as it works, so its checklist visibly advances. The
+emoji itself does not move — GitHub renders emoji as static images.
+
+To replace it with something animated, supply an APNG or GIF (an animated SVG will
+not play in a comment). The image cannot simply live in the repository and be
+linked: the comment renderer fetches images server-side, so a
+`raw.githubusercontent.com` link into a private repository fails. Upload it once by
+dragging it into the comment box of any issue in your repository, which inserts a
+`https://github.com/user-attachments/assets/<id>` URL, then discard the draft
+comment and pass that URL in:
+
+```yaml
+with:
+  kiro_api_key: ${{ secrets.KIRO_API_KEY }}
+  working_indicator: '<img src="https://github.com/user-attachments/assets/<id>" width="14" height="14" style="vertical-align: middle" />'
+```
+
+On a private repository that URL renders only for people who can see the
+repository — which is who the comment is for anyway.
 
 ## Outputs
 

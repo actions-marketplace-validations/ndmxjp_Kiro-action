@@ -126,8 +126,8 @@ Outputs: `conclusion`, `contains_trigger`, `execution_file`, `branch_name`,
 `comment_id`, `github_token`.
 
 While a run is going the comment reads `Kiro is working… ⏳` and the agent rewrites
-it as the work advances. For a moving indicator, point `working_indicator` at an
-animated image — see
+it as the work advances. `working_indicator` can replace the emoji with an image of
+your own — see
 [docs/configuration.md](docs/configuration.md#an-animated-in-progress-indicator).
 
 ## Permissions and safety
