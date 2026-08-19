@@ -65,7 +65,6 @@ the run.
 | Input                         | Default | Notes                                                                                                                             |
 | ----------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | `path_to_kiro_cli_executable` | `""`    | Use an existing binary instead of installing. This is the way to pin a CLI version; the install script always fetches the latest. |
-| `path_to_bun_executable`      | `""`    | Use an existing Bun instead of installing one.                                                                                    |
 | `display_report`              | `true`  | Append the CLI output to the job summary.                                                                                         |
 | `working_indicator`           | `""`    | Markdown or HTML shown beside "Kiro is working…" while a run is in progress. Empty means the ⏳ emoji.                            |
 

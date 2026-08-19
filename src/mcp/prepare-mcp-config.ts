@@ -22,23 +22,16 @@ type PrepareConfigParams = {
 };
 
 /**
- * Builds the bun invocation for one of this action's own MCP servers. The flags
- * mirror the entrypoint invocation in action.yml so the server process reads its
- * runtime config from the action directory rather than from the (untrusted)
- * working directory.
+ * Path to one of this action's own bundled MCP servers.
+ *
+ * The servers ship as separate bundles because the Kiro CLI starts them as
+ * processes of their own, by command line. Running them from dist/ under the
+ * runner's Node means a server needs no dependency install either, and — unlike
+ * the Bun invocation this replaced — nothing reads configuration out of the
+ * working directory, which is attacker-controlled on a pull request.
  */
-function bunServerArgs(scriptPath: string): string[] {
-  const actionPath = process.env.GITHUB_ACTION_PATH;
-  return [
-    "--no-env-file",
-    `--config=${actionPath}/bunfig.toml`,
-    "run",
-    `${actionPath}/${scriptPath}`,
-  ];
-}
-
-function bunCommand(): string {
-  return process.env.PATH_TO_BUN_EXECUTABLE || "bun";
+function serverScript(name: string): string {
+  return `${process.env.GITHUB_ACTION_PATH}/dist/mcp/${name}.mjs`;
 }
 
 async function checkActionsReadPermission(
@@ -84,8 +77,8 @@ export async function prepareMcpServers(
   // whenever there is a tracking comment to update (tag mode).
   if (kiroCommentId) {
     servers.github_comment = {
-      command: bunCommand(),
-      args: bunServerArgs("src/mcp/github-comment-server.ts"),
+      command: "node",
+      args: [serverScript("github-comment-server")],
       env: {
         GITHUB_TOKEN: githubToken,
         REPO_OWNER: owner,
@@ -106,8 +99,8 @@ export async function prepareMcpServers(
   if (wantsCiServer && workflowToken) {
     if (await checkActionsReadPermission(workflowToken, owner, repo)) {
       servers.github_ci = {
-        command: bunCommand(),
-        args: bunServerArgs("src/mcp/github-actions-server.ts"),
+        command: "node",
+        args: [serverScript("github-actions-server")],
         env: {
           // Deliberately the workflow token, not an app token: this is the
           // identity whose `actions: read` scope was just verified.
