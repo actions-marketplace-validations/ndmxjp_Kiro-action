@@ -18,6 +18,14 @@ jobs:
         with:
           bun-version: 1.3.14
 
+      # The action's bundle runs under the runner's Node, not Bun, so record which
+      # version that is: the bundle targets node24 and uses import.meta.main,
+      # which silently does nothing on older majors.
+      - name: Runtime versions
+        run: |
+          node --version
+          bun --version
+
       - run: bun install --frozen-lockfile
 
       - name: Typecheck
