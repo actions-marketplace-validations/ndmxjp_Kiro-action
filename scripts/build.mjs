@@ -17,7 +17,7 @@ import { rmSync } from "node:fs";
 
 const ENTRY_POINTS = {
   // The action itself. action.yml invokes this one.
-  "index.mjs": "src/entrypoints/run.ts",
+  "index.mjs": "src/entrypoints/main.ts",
   "mcp/github-comment-server.mjs": "src/mcp/github-comment-server.ts",
   "mcp/github-actions-server.mjs": "src/mcp/github-actions-server.ts",
 };
@@ -32,8 +32,9 @@ for (const [outfile, entry] of Object.entries(ENTRY_POINTS)) {
     outfile: `dist/${outfile}`,
     bundle: true,
     platform: "node",
-    // Matches `runs.using` in action.yml. `import.meta.main` needs Node 24.
-    target: "node24",
+    // The runner's Node, measured at v22.23.2 on ubuntu-latest, not the newest
+    // release. CI prints the version so this stays honest.
+    target: "node22",
     format: "esm",
     // Minified: a bundle diff is unreadable either way, so the tradeoff is only
     // about how much generated data lands in git on every dependency bump.
