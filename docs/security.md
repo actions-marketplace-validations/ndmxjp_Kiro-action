@@ -191,9 +191,12 @@ That last point is why the comment body goes through redaction and not just
 sanitisation: on a public repository the tracking comment is readable by the whole
 internet, and the agent runs in a process whose environment holds the key.
 
-Still worth doing before going public: gate the workflow with an `if:` condition so
-a runner does not start for every comment, and rotate `KIRO_API_KEY` if it has ever
-been pasted anywhere outside the secret store.
+Still worth doing before going public: rotate `KIRO_API_KEY` if it has ever been
+pasted anywhere outside the secret store, and gate the workflow so a runner does
+not start for every event. The gate wants to be specific, not just present — see
+`examples/kiro.yml`, which names the label rather than accepting any `labeled`
+event, omits `assigned` unless `assignee_trigger` is configured, and drops
+bot-authored comments before the runner starts rather than after.
 
 ## Known gaps
 

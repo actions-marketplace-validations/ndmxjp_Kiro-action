@@ -35,17 +35,36 @@ on:
   pull_request_review_comment:
     types: [created]
   issues:
-    types: [opened, labeled, assigned]
+    types: [opened, labeled]
 
 jobs:
   kiro:
-    # Skip the job entirely unless the trigger phrase is present, so the runner
-    # is not started for every comment in the repository.
-    if: |
-      contains(github.event.comment.body, '@kiro') ||
-      contains(github.event.issue.body, '@kiro') ||
-      github.event.action == 'labeled' ||
-      github.event.action == 'assigned'
+    # Start a runner only when a trigger is actually plausible. Each clause
+    # matters on a public repository, where anyone can comment:
+    #   - the label clause names the label, so unrelated labels do not fire;
+    #   - `assigned` is left out entirely, because assignee_trigger defaults to
+    #     empty and such a run could only ever do nothing;
+    #   - bot authors are skipped here rather than after the runner has started.
+    if: >-
+      (
+        github.event_name == 'issues' &&
+        github.event.action == 'labeled' &&
+        github.event.label.name == 'kiro'
+      ) || (
+        github.event_name == 'issues' &&
+        github.event.action == 'opened' &&
+        github.event.issue.user.type != 'Bot' &&
+        (
+          contains(github.event.issue.body, '@kiro') ||
+          contains(github.event.issue.title, '@kiro')
+        )
+      ) || (
+        github.event.comment.user.type != 'Bot' &&
+        contains(github.event.comment.body, '@kiro')
+      ) || (
+        github.event.review.user.type != 'Bot' &&
+        contains(github.event.review.body, '@kiro')
+      )
     runs-on: ubuntu-latest
     permissions:
       contents: write
