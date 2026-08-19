@@ -25,6 +25,31 @@ function config(overrides: Partial<BuildAgentConfigParams> = {}) {
   });
 }
 
+/**
+ * Runs `body` with RUNNER_TEMP set to `value`, or unset when that is undefined.
+ *
+ * The write policy is derived from RUNNER_TEMP, and a GitHub runner always sets
+ * it while a developer's shell does not — so a test that leaves it to the
+ * environment passes locally and fails in CI.
+ */
+function withRunnerTemp<T>(value: string | undefined, body: () => T): T {
+  const previous = process.env.RUNNER_TEMP;
+  if (value === undefined) {
+    delete process.env.RUNNER_TEMP;
+  } else {
+    process.env.RUNNER_TEMP = value;
+  }
+  try {
+    return body();
+  } finally {
+    if (previous === undefined) {
+      delete process.env.RUNNER_TEMP;
+    } else {
+      process.env.RUNNER_TEMP = previous;
+    }
+  }
+}
+
 describe("buildAgentConfig on the v2 engine", () => {
   test("grants the MCP servers it was given, and never merges repo MCP config", () => {
     const built = config();
@@ -51,35 +76,27 @@ describe("buildAgentConfig on the v2 engine", () => {
     // The agent is asked to leave its commit message under RUNNER_TEMP, and to
     // read CI logs downloaded there, so those paths have to be allowed too —
     // otherwise the instruction is one the tool policy refuses.
-    const previous = process.env.RUNNER_TEMP;
-    process.env.RUNNER_TEMP = "/tmp/runner";
-    try {
-      expect(config().toolsSettings?.write).toEqual({
-        allowedPaths: [
-          "./**",
-          "/tmp/runner/kiro-*",
-          "/tmp/runner/github-ci-logs/**",
-        ],
-      });
-    } finally {
-      if (previous === undefined) {
-        delete process.env.RUNNER_TEMP;
-      } else {
-        process.env.RUNNER_TEMP = previous;
-      }
-    }
+    const write = withRunnerTemp(
+      "/tmp/runner",
+      () => config().toolsSettings?.write,
+    );
+
+    expect(write).toEqual({
+      allowedPaths: [
+        "./**",
+        "/tmp/runner/kiro-*",
+        "/tmp/runner/github-ci-logs/**",
+      ],
+    });
   });
 
   test("confines writes to the checkout when there is no runner temp", () => {
-    const previous = process.env.RUNNER_TEMP;
-    delete process.env.RUNNER_TEMP;
-    try {
-      expect(config().toolsSettings?.write).toEqual({ allowedPaths: ["./**"] });
-    } finally {
-      if (previous !== undefined) {
-        process.env.RUNNER_TEMP = previous;
-      }
-    }
+    const write = withRunnerTemp(
+      undefined,
+      () => config().toolsSettings?.write,
+    );
+
+    expect(write).toEqual({ allowedPaths: ["./**"] });
   });
 
   test("allows read-only git and denies the dangerous commands", () => {
@@ -172,11 +189,21 @@ describe("buildAgentConfig on the v3 engine", () => {
     expect(rules.some((rule) => rule.capability === "mcp")).toBe(false);
   });
 
-  test("confines writes to the checkout", () => {
-    const rules = config({ engine: "v3" }).permissions?.rules ?? [];
-    const write = rules.find((rule) => rule.capability === "fs_write");
+  test("confines writes to the checkout and the runner paths a run needs", () => {
+    const writeRule = (runnerTemp: string | undefined) =>
+      withRunnerTemp(runnerTemp, () =>
+        (config({ engine: "v3" }).permissions?.rules ?? []).find(
+          (rule) => rule.capability === "fs_write",
+        ),
+      );
 
-    expect(write).toEqual({
+    expect(writeRule("/tmp/runner")).toEqual({
+      capability: "fs_write",
+      match: ["./**", "/tmp/runner/kiro-*", "/tmp/runner/github-ci-logs/**"],
+      effect: "allow",
+    });
+
+    expect(writeRule(undefined)).toEqual({
       capability: "fs_write",
       match: ["./**"],
       effect: "allow",
