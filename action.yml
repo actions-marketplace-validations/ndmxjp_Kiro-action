@@ -80,11 +80,11 @@ inputs:
     required: false
     default: ""
   allowed_shell_commands:
-    description: "Comma-separated shell command patterns to allow, e.g. 'bun test *,bun run build'. Only honoured with agent_engine: v3 — the v2 engine cannot scope shell access, so the input is ignored there. See docs/security.md."
+    description: "Comma-separated shell command patterns to allow, in glob form, e.g. 'bun test *,bun run build'. Honoured on both engines; the deny list (curl, git push, git config, …) always wins. See docs/security.md."
     required: false
     default: ""
   agent_engine:
-    description: "Kiro agent engine: 'v2' (default) or 'v3'. v3 enforces per-command shell rules and confines writes to the checkout, but ignores this action's MCP servers, so tag mode cannot report progress on it. Use v3 for agent-mode automation that needs a scoped shell."
+    description: "Kiro agent engine: 'v2' (default) or 'v3'. Both scope the shell per command and confine writes to the checkout — v2 through toolsSettings, v3 through permissions.rules. v3 is early access and reads MCP servers from ~/.kiro/settings/mcp.json rather than the agent profile, which also merges the checkout's copy, so stay on v2 unless you need something only v3 has. See docs/security.md."
     required: false
     default: "v2"
   trust_all_tools:
