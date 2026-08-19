@@ -171,11 +171,11 @@ In short:
 ## Development
 
 ```sh
-bun install
+bun install --frozen-lockfile   # build from the locked tree, or dist/ will differ
 bun run typecheck
 bun run format:check
 bun test
-bun run build        # rebuild dist/ after changing src/
+bun run build                   # rebuild dist/ after changing src/
 ```
 
 `dist/` is committed: `action.yml` runs the bundle so a workflow needs no
