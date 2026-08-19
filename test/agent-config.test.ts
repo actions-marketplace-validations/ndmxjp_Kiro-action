@@ -47,8 +47,39 @@ describe("buildAgentConfig on the v2 engine", () => {
     expect(hasUnscopedShell(built)).toBe(false);
   });
 
-  test("confines writes to the checkout", () => {
-    expect(config().toolsSettings?.write).toEqual({ allowedPaths: ["./**"] });
+  test("confines writes to the checkout and the runner paths a run needs", () => {
+    // The agent is asked to leave its commit message under RUNNER_TEMP, and to
+    // read CI logs downloaded there, so those paths have to be allowed too —
+    // otherwise the instruction is one the tool policy refuses.
+    const previous = process.env.RUNNER_TEMP;
+    process.env.RUNNER_TEMP = "/tmp/runner";
+    try {
+      expect(config().toolsSettings?.write).toEqual({
+        allowedPaths: [
+          "./**",
+          "/tmp/runner/kiro-*",
+          "/tmp/runner/github-ci-logs/**",
+        ],
+      });
+    } finally {
+      if (previous === undefined) {
+        delete process.env.RUNNER_TEMP;
+      } else {
+        process.env.RUNNER_TEMP = previous;
+      }
+    }
+  });
+
+  test("confines writes to the checkout when there is no runner temp", () => {
+    const previous = process.env.RUNNER_TEMP;
+    delete process.env.RUNNER_TEMP;
+    try {
+      expect(config().toolsSettings?.write).toEqual({ allowedPaths: ["./**"] });
+    } finally {
+      if (previous !== undefined) {
+        process.env.RUNNER_TEMP = previous;
+      }
+    }
   });
 
   test("allows read-only git and denies the dangerous commands", () => {

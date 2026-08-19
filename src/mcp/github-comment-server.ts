@@ -12,7 +12,7 @@ import { z } from "zod";
 import { Octokit } from "@octokit/rest";
 import { GITHUB_API_URL } from "../github/api/config";
 import { updateKiroComment } from "../github/operations/comments/update-kiro-comment";
-import { sanitizeContent } from "../github/utils/sanitizer";
+import { redactAllSecrets, sanitizeContent } from "../github/utils/sanitizer";
 
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 const REPO_OWNER = process.env.REPO_OWNER;
@@ -49,9 +49,12 @@ server.tool(
         owner: REPO_OWNER!,
         repo: REPO_NAME!,
         commentId: parseInt(KIRO_COMMENT_ID!, 10),
-        // The body is model-authored but may quote untrusted repository or
-        // comment content, so run it through the same sanitizer used on input.
-        body: sanitizeContent(body),
+        // Model-authored, but it may quote untrusted repository or comment
+        // content, so it gets the same sanitizer as input — plus secret
+        // redaction, because the agent runs with KIRO_API_KEY in its environment
+        // and this comment is the one channel it can write that humans read. On
+        // a public repository that channel is the whole internet.
+        body: redactAllSecrets(sanitizeContent(body)),
         isPullRequestReviewComment:
           GITHUB_EVENT_NAME === "pull_request_review_comment",
       });

@@ -126,6 +126,11 @@ export function redactSecrets(content: string): string {
     "[REDACTED_AWS_KEY_ID]",
   );
 
+  // Kiro API keys: ksk_... (prefix documented at
+  // kiro.dev/docs/getting-started/authentication). This is the credential this
+  // action is handed, so it is the one most likely to be within a run's reach.
+  content = content.replace(/ksk_[A-Za-z0-9_-]{8,}/g, "[REDACTED_API_KEY]");
+
   // Anthropic API keys: sk-ant-...
   content = content.replace(/sk-ant-[A-Za-z0-9_-]{20,}/g, "[REDACTED_API_KEY]");
 
@@ -157,10 +162,10 @@ const ENV_SECRET_NAMES = [
 /**
  * Redact literal secret values that we know about from the environment.
  *
- * `redactSecrets` only knows shapes; the Kiro API key has no documented public
- * prefix, and GitHub's log masking does not apply to files we write to disk
- * (the execution log, the step summary). Values shorter than 8 characters are
- * skipped because redacting them would mangle unrelated text.
+ * Shape matching cannot be complete — a GHES token or a future key format will
+ * not match — and GitHub's log masking does not apply to what we write to disk
+ * or post to an issue. Values shorter than 8 characters are skipped because
+ * redacting them would mangle unrelated text.
  */
 export function redactEnvSecrets(content: string): string {
   for (const name of ENV_SECRET_NAMES) {

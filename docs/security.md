@@ -165,6 +165,36 @@ kirodotdev/Kiro#10733 has it silently dropping any agent config without a
   shell allowlist.
 - GitHub App tokens are revoked in an `always()` post step.
 
+## What making the repository public changes
+
+Repository secrets are not exposed by a visibility change: they stay write-only,
+and workflow logs mask them. What changes is _who can start a run that holds one_.
+
+| Trigger                    | Who can fire it on a public repo | Are secrets in scope?                                    |
+| -------------------------- | -------------------------------- | -------------------------------------------------------- |
+| `pull_request` from a fork | anyone                           | **no** — GitHub withholds secrets                        |
+| `pull_request_target`      | anyone                           | **yes**, with the base repo's write token. Do not use it |
+| `issue_comment`, `issues`  | **anyone with a GitHub account** | **yes** — these run in the base repo context             |
+
+So on a public repository, a stranger commenting the trigger phrase starts a job
+that has `KIRO_API_KEY` in its environment. Two things bound that:
+
+- The actor check runs before the CLI is invoked, so a stranger's comment costs
+  runner minutes but no Kiro credits and no agent execution.
+- The agent never receives the key as data. It cannot reach the network (`curl`,
+  `wget`, `web_fetch` are all refused) and its only writable channel to a human is
+  the tracking comment, which is redacted for both credential shapes — including
+  the `ksk_` prefix Kiro keys use — and for the literal values of the secrets this
+  action knows about.
+
+That last point is why the comment body goes through redaction and not just
+sanitisation: on a public repository the tracking comment is readable by the whole
+internet, and the agent runs in a process whose environment holds the key.
+
+Still worth doing before going public: gate the workflow with an `if:` condition so
+a runner does not start for every comment, and rotate `KIRO_API_KEY` if it has ever
+been pasted anywhere outside the secret store.
+
 ## Known gaps
 
 These are real limitations, not oversights:

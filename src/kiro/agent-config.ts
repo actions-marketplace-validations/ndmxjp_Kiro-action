@@ -180,6 +180,21 @@ function parseList(value: string): string[] {
     .filter((entry) => entry.length > 0);
 }
 
+/**
+ * Paths outside the checkout that a run genuinely needs, all under the runner's
+ * temp directory: the prompt file when it is too large to pass as an argument,
+ * the CI logs the github_ci server downloads for the agent to read, and the file
+ * the agent is asked to leave its commit message in. Everything else outside the
+ * checkout stays refused.
+ */
+function runnerTempPaths(): string[] {
+  const runnerTemp = process.env.RUNNER_TEMP;
+  if (!runnerTemp) {
+    return [];
+  }
+  return [`${runnerTemp}/kiro-*`, `${runnerTemp}/github-ci-logs/**`];
+}
+
 export type BuildAgentConfigParams = {
   mode: AutoDetectedMode;
   engine: AgentEngine;
@@ -254,7 +269,7 @@ function buildV2ToolsSettings(shellPatterns: string[]): ToolsSettings {
   return {
     // Confine writes to the checkout. Without this the agent could write to
     // $HOME, and from there to its own configuration.
-    write: { allowedPaths: ["./**"] },
+    write: { allowedPaths: ["./**", ...runnerTempPaths()] },
     shell: {
       allowedCommands: [
         ...DEFAULT_SHELL_PREFIXES.map(prefixToRegex),
@@ -282,7 +297,11 @@ function buildV3Rules(
     { capability: "fs_read", effect: "allow" },
     // Confine writes to the checkout. Without this the agent could write to
     // $HOME, which is how it would reach its own permission files.
-    { capability: "fs_write", match: ["./**"], effect: "allow" },
+    {
+      capability: "fs_write",
+      match: ["./**", ...runnerTempPaths()],
+      effect: "allow",
+    },
   ];
 
   // Only this action's own servers. Without the rule the tool call falls through

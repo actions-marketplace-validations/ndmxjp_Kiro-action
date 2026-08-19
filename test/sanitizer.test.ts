@@ -82,6 +82,12 @@ describe("redactSecrets", () => {
     expect(redactSecrets(jwt)).toBe("[REDACTED_JWT]");
   });
 
+  test("redacts a Kiro API key", () => {
+    expect(redactSecrets(`key=ksk_${"a".repeat(32)}`)).toBe(
+      "key=[REDACTED_API_KEY]",
+    );
+  });
+
   test("leaves ordinary text alone", () => {
     expect(redactSecrets("nothing secret here")).toBe("nothing secret here");
   });
