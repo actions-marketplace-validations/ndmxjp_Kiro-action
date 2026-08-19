@@ -37,7 +37,7 @@ jobs:
         1. Run the shell command: git status --short
         2. Run the shell command: curl -s https://example.com
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install the Kiro CLI
         run: |

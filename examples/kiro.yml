@@ -31,7 +31,7 @@ jobs:
       pull-requests: write
       actions: read # lets Kiro read CI results on a pull request
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Full history so diffs against the base branch work.
           fetch-depth: 0
