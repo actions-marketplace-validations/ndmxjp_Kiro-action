@@ -152,9 +152,8 @@ In short:
 ## Requirements
 
 - A Kiro API key (`KIRO_API_KEY`).
-- A runner with network access: the action installs the Kiro CLI, which then
-  talks to the Kiro service. Nothing else is fetched — the action itself ships as
-  a bundle in `dist/`, so no dependency install happens at run time.
+- A runner with network access: the action installs Bun and the Kiro CLI, resolves
+  its own dependencies, and the CLI then talks to the Kiro service.
 - `actions/checkout` with `fetch-depth: 0` is recommended so diffs against the
   base branch work.
 
@@ -171,16 +170,15 @@ In short:
 ## Development
 
 ```sh
-bun install --frozen-lockfile   # build from the locked tree, or dist/ will differ
+bun install --frozen-lockfile
 bun run typecheck
 bun run format:check
 bun test
-bun run build                   # rebuild dist/ after changing src/
 ```
 
-`dist/` is committed: `action.yml` runs the bundle so a workflow needs no
-dependency install. CI fails if it is stale, so rebuild and commit it with any
-change under `src/`.
+The action runs from source: `action.yml` installs Bun, runs
+`bun install --production` in the action directory, and executes
+`src/entrypoints/main.ts`. There is no build step and nothing generated to commit.
 
 ## Licence
 

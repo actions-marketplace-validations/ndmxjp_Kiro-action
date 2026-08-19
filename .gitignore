@@ -1,5 +1,3 @@
 .DS_Store
 node_modules
 **/.kiro/settings/mcp.local.json
-
-# dist/ is committed on purpose: action.yml runs the bundle, not the sources.

@@ -1,0 +1,3 @@
+# Intentionally minimal. action.yml pins --config to this file so bun resolves its
+# runtime config from the action directory rather than from the checked-out
+# workspace (which is attacker-controlled on pull_request events).
